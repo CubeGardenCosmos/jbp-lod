@@ -100,7 +100,8 @@ public final class JbpLodClient implements ClientModInitializer {
         }
         closeActiveRuntime("session replacement");
 
-        boolean developmentEnvironment = FabricLoader.getInstance().isDevelopmentEnvironment();
+        boolean developmentEnvironment = FabricLoader.getInstance().isDevelopmentEnvironment()
+                || "true".equalsIgnoreCase(String.valueOf(systemProperty("jbp.lod.devBuild")).trim());
         var integratedServer = client.getSingleplayerServer();
         boolean singleplayer = integratedServer != null;
         String developmentScopeId = developmentEnvironment
