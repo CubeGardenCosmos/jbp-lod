@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -63,7 +64,7 @@ final class LodColorTarget implements AutoCloseable {
                     .newLayout(VK_IMAGE_LAYOUT_GENERAL).image(image)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
             barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
-            vkCmdPipelineBarrier2(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barrier));
+            vkCmdPipelineBarrier2KHR(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barrier));
         }
         initialized = true;
     }

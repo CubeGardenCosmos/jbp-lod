@@ -71,6 +71,8 @@ public final class VulkanLodRenderer {
     private static final int LIGHTMAP_BINDING = 7;
     private static final int FOG_BINDING = 8;
     private static final VulkanLodRenderer INSTANCE = new VulkanLodRenderer();
+    /** Process-wide once-only flag for the first recorded draw path log (render thread only). */
+    private static boolean drawPathLogged;
 
     private final LodRenderState state = new LodRenderState();
     private final Set<String> reportedInvalid = new HashSet<>();
@@ -225,6 +227,7 @@ public final class VulkanLodRenderer {
                     VkCommandBuffer commandBuffer = slot.beginCommands();
                     FrameHooks hooks = new FrameHooks(res, runtime, gameDepthView.view(), gameDepth, lodDepth, plan);
                     runtime.recordUploads(commandBuffer);
+                    slot.clearDrawOutputs(commandBuffer);
                     LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(frameNumber, mvp,
                             context.cameraX(), context.cameraY(), context.cameraZ(),
                             color.width(), color.height(), SUBDIVISION_SIZE, runtime.renderDistanceSections(),
@@ -235,12 +238,19 @@ public final class VulkanLodRenderer {
                     res.offscreen.begin(commandBuffer, slot.slotIndex(), false);
                     vkCmdBindIndexBuffer(commandBuffer, res.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
                     LodDrawPlan secondary = secondaryPlan(plan);
+                    int drawCalls = 0;
                     for (int draw = 0; draw < LodDrawSequence.CURRENT_REGIONS.size(); draw++) {
                         LodFrameBuffers.DrawRegion region = LodDrawSequence.CURRENT_REGIONS.get(draw);
                         VulkanLodPipeline pipeline = region == LodFrameBuffers.DrawRegion.TRANSLUCENT
                                 ? res.translucentPipeline : res.temporalPipeline;
                         pipeline.bind(commandBuffer, slot.slotIndex(), 0, 0, color.width(), color.height());
                         recordDraw(commandBuffer, secondary, slot, region);
+                        drawCalls += drawCallCount(secondary);
+                    }
+                    if (!drawPathLogged) {
+                        drawPathLogged = true;
+                        LOGGER.info("[JBP-LOD] V4 first draw recorded: path={} regions={} draw-calls={}",
+                                secondary.describe(), LodDrawSequence.CURRENT_REGIONS, drawCalls);
                     }
                     res.offscreen.end(commandBuffer);
                     res.history.capture(commandBuffer, slot);
@@ -319,6 +329,11 @@ public final class VulkanLodRenderer {
                 }
             }
         }
+    }
+
+    /** Number of {@code vkCmdDrawIndexedIndirect*} calls {@link #recordDraw} records for one region. */
+    static int drawCallCount(LodDrawPlan plan) {
+        return plan.mode() == LodDrawPlan.Mode.SINGLE_DRAW_LOOP ? plan.maxDraws() : 1;
     }
 
     private static LodDrawPlan secondaryPlan(LodDrawPlan plan) {
@@ -450,7 +465,7 @@ public final class VulkanLodRenderer {
         @Override
         public void drawCullVisibility(VkCommandBuffer commandBuffer, LodFrameBuffers slot) {
             res.cullPass.record(commandBuffer, slot, res.offscreen.depthTarget(slot.slotIndex()), runtime.nodeBuffers().sectionMetadata(),
-                    runtime.executor().visibility());
+                    runtime.executor().sectionVisibility());
         }
     }
 

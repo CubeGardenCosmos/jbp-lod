@@ -29,7 +29,10 @@ final class LodRenderLifecycle {
         registered = true;
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> SCOPE_GENERATION.incrementAndGet());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> SCOPE_GENERATION.incrementAndGet());
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> SCOPE_GENERATION.incrementAndGet());
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+            SCOPE_GENERATION.incrementAndGet();
+            VulkanLodRenderer.shutdown();
+        });
         ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(new IdentifiableResourceReloadListener() {
             private final Identifier id = Identifier.fromNamespaceAndPath("jbp-lod", "vulkan_lod_resources");
 

@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameContext;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
@@ -95,12 +97,12 @@ final class LodOffscreenPass implements AutoCloseable {
                     .pColorAttachments(color).pDepthAttachment(depth);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(width, height);
-            vkCmdBeginRendering(commandBuffer, rendering);
+            vkCmdBeginRenderingKHR(commandBuffer, rendering);
         }
     }
 
     void end(VkCommandBuffer commandBuffer) {
-        vkCmdEndRendering(commandBuffer);
+        vkCmdEndRenderingKHR(commandBuffer);
         LodRenderBarriers.memory(commandBuffer,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | LodRenderBarriers.DEPTH_TEST_STAGES,
                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,

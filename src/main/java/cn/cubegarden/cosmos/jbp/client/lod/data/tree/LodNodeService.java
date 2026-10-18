@@ -1,6 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.data.tree;
 
 import it.unimi.dsi.fastutil.ints.IntIterator;
+import cn.cubegarden.cosmos.jbp.client.lod.data.ActivationLog;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,8 @@ public final class LodNodeService implements AutoCloseable {
     private final ConcurrentLinkedQueue<BuiltSection> geometryResults = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<long[]> requestBatches = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<long[]> removeBatches = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Long> requestFailures = new ConcurrentLinkedQueue<>();
+    private final MeshRequests meshRequests;
     private final AtomicInteger workCounter = new AtomicInteger();
 
     //Worker-thread locals gathered per loop
@@ -70,6 +73,7 @@ public final class LodNodeService implements AutoCloseable {
                           MeshRequests meshRequests) {
         this.maxNodeCount = maxNodeCount;
         this.maxSectionCount = maxSectionCount;
+        this.meshRequests = meshRequests;
         this.geometryReserveBytes = Math.min(GEOMETRY_RESERVE_BYTES, geometryCapacityBytes / 10);
         this.geometry = new SectionGeometryManager(maxSectionCount, geometryCapacityBytes);
 
@@ -137,6 +141,15 @@ public final class LodNodeService implements AutoCloseable {
     /** Mesh result for a requested position (empty sections are valid results). */
     public void submitGeometryResult(BuiltSection section) {
         this.geometryResults.add(section);
+        this.signalWork(1);
+    }
+
+    /**
+     * A mesh build for {@code position} failed terminally (see the mesh provider). The worker cancels the pending
+     * request for it; nothing is submitted in its place.
+     */
+    public void submitRequestFailed(long position) {
+        this.requestFailures.add(position);
         this.signalWork(1);
     }
 
@@ -230,6 +243,14 @@ public final class LodNodeService implements AutoCloseable {
             workDone++;
             this.manager.processChildChange(change.position, change.childExistence);
         }
+        Long failedPosition;
+        while ((failedPosition = this.requestFailures.poll()) != null) {
+            workDone++;
+            if (this.manager.processRequestFailure(failedPosition)) {
+                // Top-level request is still wanted; the mesh provider holds the retry back during its cooldown.
+                this.meshRequests.request(failedPosition);
+            }
+        }
 
         //Limit uploading as well as by geometry capacity being available
         long estimatedGeometryUploadAmount = 0;
@@ -308,6 +329,11 @@ public final class LodNodeService implements AutoCloseable {
         this.cleanerIdResetClear.clear();
         delta.setStatistics(this.manager.getCurrentMaxNodeId(), this.manager.getNodeCount(),
                 this.geometry.getSectionCount(), this.geometry.getGeometryUsedBytes());
+
+        if (!delta.nodeWrites().isEmpty() && ActivationLog.first("publish")) {
+            LOGGER.info("[JBP-LOD] First node publish: {} node writes, {} metadata writes, {} quad uploads.",
+                    delta.nodeWrites().size(), delta.metadataWrites().size(), delta.quadUploads().size());
+        }
 
         synchronized (this.resultLock) {
             if (this.pending == null) {

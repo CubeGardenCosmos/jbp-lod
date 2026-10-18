@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
@@ -15,7 +16,6 @@ import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
 
 /**
  * Synchronization2 barriers for the depth hand-off between the game's depth buffer, the LOD depth
@@ -40,7 +40,7 @@ final class LodRenderBarriers {
             VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                     .srcStageMask(srcStages).srcAccessMask(srcAccess)
                     .dstStageMask(dstStages).dstAccessMask(dstAccess);
-            vkCmdPipelineBarrier2(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default()
+            vkCmdPipelineBarrier2KHR(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default()
                     .pMemoryBarriers(barrier));
         }
     }
@@ -57,7 +57,7 @@ final class LodRenderBarriers {
                     .image(image);
             barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1)
                     .baseArrayLayer(0).layerCount(1);
-            vkCmdPipelineBarrier2(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default()
+            vkCmdPipelineBarrier2KHR(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default()
                     .pImageMemoryBarriers(barrier));
         }
     }

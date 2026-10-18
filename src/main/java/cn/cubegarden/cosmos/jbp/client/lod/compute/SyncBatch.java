@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.compute;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferMemoryBarrier2;
@@ -24,7 +25,6 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
 
 /**
  * One {@code vkCmdPipelineBarrier2} carrying several range-scoped Synchronization2 buffer barriers.
@@ -98,7 +98,7 @@ final class SyncBatch {
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack)
                     .sType$Default()
                     .pBufferMemoryBarriers(barriers);
-            vkCmdPipelineBarrier2(commandBuffer, dependency);
+            vkCmdPipelineBarrier2KHR(commandBuffer, dependency);
         }
         entries.clear();
     }

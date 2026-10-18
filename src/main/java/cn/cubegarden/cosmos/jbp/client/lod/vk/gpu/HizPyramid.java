@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.gpu;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import cn.cubegarden.cosmos.jbp.client.lod.compute.ComputePipeline;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
@@ -320,7 +321,7 @@ public final class HizPyramid implements AutoCloseable {
             }
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack).sType$Default()
                     .pImageMemoryBarriers(buffer);
-            vkCmdPipelineBarrier2(commandBuffer, dependency);
+            vkCmdPipelineBarrier2KHR(commandBuffer, dependency);
         }
     }
 

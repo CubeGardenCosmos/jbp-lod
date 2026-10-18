@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.gpu;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferMemoryBarrier2;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -16,7 +17,6 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
 import static org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED;
 
 /** Range-scoped Vulkan Synchronization2 buffer dependencies used by the LOD compute graph. */
@@ -117,7 +117,7 @@ public final class Barriers {
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack)
                     .sType$Default()
                     .pBufferMemoryBarriers(bufferBarrier);
-            vkCmdPipelineBarrier2(commandBuffer, dependency);
+            vkCmdPipelineBarrier2KHR(commandBuffer, dependency);
         }
     }
 }

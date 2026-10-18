@@ -44,11 +44,17 @@ public final class LiveChunkCapture {
             dirty.addAll(loaded.keySet());
         }
         // Bound synchronous capture per tick; expensive conversion/storage remains off-thread.
+        // A dirty chunk stays dirty until the producer has backlog room for all of its sections.
         var iterator = dirty.iterator();
         int remaining = 2;
         while (remaining-- > 0 && iterator.hasNext()) {
-            LevelChunk chunk = loaded.get(iterator.next()); iterator.remove();
-            if (chunk != null) producer.capture(chunk);
+            long key = iterator.next();
+            LevelChunk chunk = loaded.get(key);
+            if (chunk != null) {
+                if (!producer.hasCapacity(chunk.getSections().length)) break;
+                producer.capture(chunk);
+            }
+            iterator.remove();
         }
     }
     public static java.util.concurrent.CompletableFuture<Void> detach() {

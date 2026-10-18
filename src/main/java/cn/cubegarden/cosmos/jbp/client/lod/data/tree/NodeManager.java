@@ -1124,6 +1124,35 @@ public final class NodeManager {
         this.activeNodeRequestCount++;
     }
 
+    /**
+     * A mesh build for {@code pos} failed terminally. A pending child request for {@code pos} is cancelled the same
+     * way an empty request is: its parent returns to a non-requested state and traversal re-requests it later.
+     * A pending top-level request is kept; returns true so the caller asks for it again (the mesh provider holds that
+     * back during its cooldown). Nothing is fabricated for the failed position.
+     */
+    public boolean processRequestFailure(long pos) {
+        int nodeId = this.activeSectionMap.get(pos);
+        if (nodeId == -1 || (nodeId & NODE_TYPE_MSK) != NODE_TYPE_REQUEST) {
+            return false;//Already resolved or superseded since the failure was reported
+        }
+        if ((nodeId & REQUEST_TYPE_MSK) == REQUEST_TYPE_SINGLE) {
+            return true;
+        }
+        int reqId = nodeId & NODE_ID_MSK;
+        NodeChildRequest req = this.childRequests.get(reqId);
+        long parentPos = req.getPosition();
+        int parentNodeId = this.activeSectionMap.get(parentPos);
+        if (parentNodeId == -1 || (parentNodeId & NODE_TYPE_MSK) == NODE_TYPE_REQUEST) {
+            throw new IllegalStateException("Child request has no parent node: " + SectionPos.pretty(parentPos));
+        }
+        parentNodeId &= NODE_ID_MSK;
+        this._removeRequest(reqId, req, parentPos);
+        this.nodeData.setNodeRequest(parentNodeId, NULL_REQUEST_ID);
+        this.nodeData.unmarkRequestInFlight(parentNodeId);
+        this.invalidateNode(parentNodeId);
+        return false;
+    }
+
     //A request is received for an inner node position
     private void processInnerRequest(long pos, int nodeId) {
         int geo = this.nodeData.getNodeGeometry(nodeId);

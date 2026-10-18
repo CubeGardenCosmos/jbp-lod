@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.gpu;
 
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
 import org.lwjgl.system.MemoryStack;
@@ -36,8 +38,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK13.vkCmdBeginRendering;
-import static org.lwjgl.vulkan.VK13.vkCmdEndRendering;
 
 /**
  * Fullscreen reduction blit into one single-level R32_SFLOAT view with dynamic rendering.
@@ -188,7 +188,7 @@ final class HizBlitPipeline implements AutoCloseable {
                     .layerCount(1).pColorAttachments(attachment);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(width, height);
-            vkCmdBeginRendering(commandBuffer, rendering);
+            vkCmdBeginRenderingKHR(commandBuffer, rendering);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0,
                     stack.longs(set), null);
@@ -200,7 +200,7 @@ final class HizBlitPipeline implements AutoCloseable {
             scissor.extent().set(width, height);
             vkCmdSetScissor(commandBuffer, 0, scissor);
             vkCmdDraw(commandBuffer, 4, 1, 0, 0);
-            vkCmdEndRendering(commandBuffer);
+            vkCmdEndRenderingKHR(commandBuffer);
         }
     }
 

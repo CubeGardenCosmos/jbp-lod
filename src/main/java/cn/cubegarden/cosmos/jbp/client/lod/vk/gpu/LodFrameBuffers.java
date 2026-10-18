@@ -260,7 +260,12 @@ public final class LodFrameBuffers implements AutoCloseable {
         retirementActions.add(resource);
     }
 
-    /** Clears stale draw/dispatch results before a fixed-count draw fallback consumes them. */
+    /**
+     * Zeroes the draw command table and draw control before this frame's compute writes. Fixed-count fallbacks
+     * (MULTI_DRAW_INDIRECT, SINGLE_DRAW_LOOP) execute {@code maxDraws} commands regardless of the GPU count, so any
+     * command cmdgen does not write must be zero (indexCount 0, a no-op). Record before
+     * {@code LodComputeExecutor.recordFrame}; the transfer-to-compute barrier orders compute writes after the clear.
+     */
     public void clearDrawOutputs(VkCommandBuffer commandBuffer) {
         ensureOpen();
         if (!recording || commandBuffer.address() != this.commandBuffer.address()) {
@@ -268,10 +273,8 @@ public final class LodFrameBuffers implements AutoCloseable {
         }
         vkCmdFillBuffer(commandBuffer, drawCommands.handle(), 0, drawCommands.capacity(), 0);
         vkCmdFillBuffer(commandBuffer, drawControl.handle(), 0, drawControl.capacity(), 0);
-        vkCmdFillBuffer(commandBuffer, translucentScratch.handle(), 0, translucentScratch.capacity(), 0);
         Barriers.transferWriteToComputeWrite(commandBuffer, drawCommands, 0, drawCommands.capacity());
         Barriers.transferWriteToComputeWrite(commandBuffer, drawControl, 0, drawControl.capacity());
-        Barriers.transferWriteToComputeWrite(commandBuffer, translucentScratch, 0, translucentScratch.capacity());
     }
 
     /** Writes the 96-byte graphics-compatible prefix of the shared scene uniform. */

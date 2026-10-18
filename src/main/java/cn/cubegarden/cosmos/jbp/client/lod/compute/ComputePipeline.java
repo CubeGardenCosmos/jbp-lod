@@ -249,10 +249,18 @@ public final class ComputePipeline implements AutoCloseable {
         }
     }
 
+    /** Process-wide count of recorded {@code vkCmdDispatch*} calls; read for the first-frame diagnostic log. */
+    private static final java.util.concurrent.atomic.AtomicLong RECORDED_DISPATCHES = new java.util.concurrent.atomic.AtomicLong();
+
+    public static long recordedDispatches() {
+        return RECORDED_DISPATCHES.get();
+    }
+
     public void dispatch(VkCommandBuffer commandBuffer, int frameSlot, int groupCountX, int groupCountY,
                          int groupCountZ, ByteBuffer pushConstants) {
         bind(commandBuffer, frameSlot, pushConstants);
         vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+        RECORDED_DISPATCHES.incrementAndGet();
     }
 
     public void dispatchIndirect(VkCommandBuffer commandBuffer, int frameSlot, GpuBuffer indirectBuffer,
@@ -262,6 +270,7 @@ public final class ComputePipeline implements AutoCloseable {
         }
         bind(commandBuffer, frameSlot, pushConstants);
         vkCmdDispatchIndirect(commandBuffer, indirectBuffer.handle(), offset);
+        RECORDED_DISPATCHES.incrementAndGet();
     }
 
     @Override

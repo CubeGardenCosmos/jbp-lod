@@ -66,6 +66,9 @@ public final class JbpLodClient implements ClientModInitializer {
         }
     }
 
+    private static final int DEV_QUIT_TICKS = Integer.getInteger("jbp.lod.devQuitAfterTicks", 0);
+    private static int devTicks;
+
     @Override
     public void onInitializeClient() {
         LOGGER.info("[JBP-LOD] Initialized client scope + storage session support (Minecraft 26.3 / Java 25).");
@@ -78,6 +81,11 @@ public final class JbpLodClient implements ClientModInitializer {
                 else startSession(client);
             }
             LiveChunkCapture.tick(client.level, activeRuntime().orElse(null));
+            // Dev smoke automation: -Djbp.lod.devQuitAfterTicks=N stops the client N ticks after the world loads.
+            if (client.level != null && DEV_QUIT_TICKS > 0 && ++devTicks == DEV_QUIT_TICKS) {
+                LOGGER.info("[JBP-LOD] devQuitAfterTicks reached; stopping the client.");
+                client.stop();
+            }
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> startSession(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> stopSession("server disconnect"));
@@ -244,7 +252,8 @@ public final class JbpLodClient implements ClientModInitializer {
         }
         previous.session().setIngestDrain(drained);
         CompletableFuture<Void> released = previous.close();
-        pendingRelease = CompletableFuture.allOf(pendingRelease, released);
+        // Handled per release so one failure cannot complete the barrier before the others have finished.
+        pendingRelease = CompletableFuture.allOf(pendingRelease, released.handle((ignored, failure) -> null));
         released.whenComplete((ignored, failure) -> {
             if (failure != null) {
                 LOGGER.warn("[JBP-LOD] Failed to release scope on {}.", reason, failure);
@@ -255,7 +264,19 @@ public final class JbpLodClient implements ClientModInitializer {
     }
 
     private static void awaitStorageShutdown() {
-        pendingRelease.handle((ignored, failure) -> null).join();
+        try {
+            pendingRelease.get(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            // Storage I/O must keep running: shutting it down would reject the queued close and leave the
+            // RocksDB handle and scope lock held.
+            LOGGER.warn("[JBP-LOD] Scope release did not complete within {}s at shutdown; leaving storage thread running so it can finish.", SHUTDOWN_WAIT_SECONDS);
+            return;
+        } catch (java.util.concurrent.ExecutionException failure) {
+            LOGGER.warn("[JBP-LOD] Scope release failed at shutdown.", failure);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
         STORAGE_IO.shutdown();
         try {
             if (!STORAGE_IO.awaitTermination(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {

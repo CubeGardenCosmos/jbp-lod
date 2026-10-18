@@ -10,6 +10,8 @@ import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,6 +45,9 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT;
  * once its command buffer has been submitted; never waits for the GPU.
  */
 public final class LodNodeGpuBuffers {
+    private static final Logger LOGGER = LoggerFactory.getLogger("jbp-lod-gpu");
+    /** Process-wide once-only flag for the first recorded upload (render thread only). */
+    private static boolean uploadLogged;
     /** Upstream traversal capacity ({@code MAX_QUEUE_SIZE}) for top-level node ids. */
     public static final int MAX_TOP_LEVEL_NODES = 200_000;
 
@@ -186,6 +191,10 @@ public final class LodNodeGpuBuffers {
         StagingBuffer staging = new StagingBuffer(game, plan.totalBytes);
         try {
             staging.write(plan.bytes);
+            if (!uploadLogged) {
+                uploadLogged = true;
+                LOGGER.info("[JBP-LOD] V4 first GPU upload recorded: bytes={}", plan.totalBytes);
+            }
             hazardBarrier(commandBuffer, nodes, plan.nodes);
             hazardBarrier(commandBuffer, topLevelIds, plan.topLevel);
             hazardBarrier(commandBuffer, sectionMetadata, plan.metadata);

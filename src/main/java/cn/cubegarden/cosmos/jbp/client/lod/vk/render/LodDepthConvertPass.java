@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
@@ -18,8 +20,6 @@ import static org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL;
 import static org.lwjgl.vulkan.VK10.vkCmdDraw;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-import static org.lwjgl.vulkan.VK13.vkCmdBeginRendering;
-import static org.lwjgl.vulkan.VK13.vkCmdEndRendering;
 
 /**
  * Re-expresses the game's depth buffer in the LOD projection's depth range inside the LOD pre-pass
@@ -86,11 +86,11 @@ final class LodDepthConvertPass implements AutoCloseable {
                     .pDepthAttachment(depth);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(target.width(), target.height());
-            vkCmdBeginRendering(commandBuffer, rendering);
+            vkCmdBeginRenderingKHR(commandBuffer, rendering);
         }
         pipeline.bind(commandBuffer, frameSlot, 0, 0, target.width(), target.height());
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRendering(commandBuffer);
+        vkCmdEndRenderingKHR(commandBuffer);
 
         LodRenderBarriers.lodDepthWritesToReaders(commandBuffer);
         LodRenderBarriers.sampledReadToGameDepthWrites(commandBuffer);

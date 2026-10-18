@@ -18,6 +18,8 @@ import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodFrameBuffers;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -68,6 +70,9 @@ public final class LodComputeExecutor implements AutoCloseable {
 
     private static final int VENDOR_AMD = 0x1002;
     private static final int BINDING_SLOTS = 16;
+    private static final Logger LOGGER = LoggerFactory.getLogger("jbp-lod-compute");
+    /** Process-wide once-only flag for the first-frame compute diagnostic (render thread only). */
+    private static boolean computeFrameLogged;
 
     private final int framesInFlight;
     private final int sectionCapacity;
@@ -82,6 +87,7 @@ public final class LodComputeExecutor implements AutoCloseable {
     private final Bound transformer;
     private final Bound visibilitySet;
     private final GpuBuffer visibility;
+    private final GpuBuffer sectionVisibility;
     private final GpuBuffer[] queueMetadata;
     private final GpuBuffer[] visibilityOps;
     private final GpuBuffer[] cleanerOutput;
@@ -134,8 +140,10 @@ public final class LodComputeExecutor implements AutoCloseable {
         this.reverseZ = reverseZ;
 
         int storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        long visibilityBytes = (long) Math.max(sectionCapacity, nodeCapacity) * Integer.BYTES;
-        visibility = track(created, GpuBuffer.allocate(game, visibilityBytes, storage, false));
+        long nodeVisibilityBytes = (long) nodeCapacity * Integer.BYTES;
+        long sectionVisibilityBytes = (long) sectionCapacity * Integer.BYTES;
+        visibility = track(created, GpuBuffer.allocate(game, nodeVisibilityBytes, storage, false));
+        sectionVisibility = track(created, GpuBuffer.allocate(game, sectionVisibilityBytes, storage, false));
         queueMetadata = new GpuBuffer[framesInFlight];
         visibilityOps = new GpuBuffer[framesInFlight];
         cleanerOutput = new GpuBuffer[framesInFlight];
@@ -262,10 +270,16 @@ public final class LodComputeExecutor implements AutoCloseable {
                 framesInFlight, 1));
     }
 
-    /** The persistent per-node/section visibility words (initially 0xFFFFFFFF); NOT per frame slot. */
-    public GpuBuffer visibility() {
+    /** Node-indexed visibility words (traversal render tracker, visibility ops, cleaner); initially 0xFFFFFFFF. */
+    public GpuBuffer nodeVisibility() {
         ensureOpen();
         return visibility;
+    }
+
+    /** Section-indexed visibility words (cull raster writes, command generation reads); initially 0xFFFFFFFF. */
+    public GpuBuffer sectionVisibility() {
+        ensureOpen();
+        return sectionVisibility;
     }
 
     /**
@@ -317,6 +331,7 @@ public final class LodComputeExecutor implements AutoCloseable {
         int opCount = ops == null ? 0 : ops.length;
         Hooks hooks = in.hooks();
 
+        long dispatchesBefore = ComputePipeline.recordedDispatches();
         HiZInputs hiz = Objects.requireNonNull(hooks.beforeTraversal(commandBuffer, slot),
                 "Hooks.beforeTraversal must return the HiZ descriptor inputs");
 
@@ -344,6 +359,11 @@ public final class LodComputeExecutor implements AutoCloseable {
         }
         recordFinalBarriers(commandBuffer, slot, nodes.nodes(), frame, cleaned);
         visibilityInitialized = true;
+        if (!computeFrameLogged) {
+            computeFrameLogged = true;
+            LOGGER.info("[JBP-LOD] V4 first compute frame recorded: dispatches={} cleaner={}",
+                    ComputePipeline.recordedDispatches() - dispatchesBefore, cleaned);
+        }
     }
 
     // ---------------------------------------------------------------- host-side inputs
@@ -418,7 +438,7 @@ public final class LodComputeExecutor implements AutoCloseable {
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_DRAW_BINDING, slot.drawCommands());
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_DRAW_COUNT_BINDING, slot.drawControl());
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_METADATA_BINDING, in.sectionMetadata());
-        cmdgen.buffer(set, LodComputeLayout.CMDGEN_VISIBILITY_BINDING, visibility);
+        cmdgen.buffer(set, LodComputeLayout.CMDGEN_VISIBILITY_BINDING, sectionVisibility);
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_LOOKUP_BINDING, lookup);
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_POSITION_BINDING, slot.positionScratch());
         cmdgen.buffer(set, LodComputeLayout.CMDGEN_TRANSLUCENT_BINDING, slot.translucentScratch());
@@ -473,15 +493,18 @@ public final class LodComputeExecutor implements AutoCloseable {
         vkCmdFillBuffer(cb, bins.handle(), 0, LodComputeLayout.TRANSLUCENT_BIN_BYTES, 0);
         if (!visibilityInitialized) {
             vkCmdFillBuffer(cb, visibility.handle(), 0, visibility.capacity(), -1);
+            vkCmdFillBuffer(cb, sectionVisibility.handle(), 0, sectionVisibility.capacity(), -1);
         }
 
         SyncBatch batch = new SyncBatch()
                 .add(lookup, 0, Integer.BYTES, TRANSFER, TRANSFER_WRITE, COMPUTE, SSBO_RW)
                 .add(requests, 0, 2L * Integer.BYTES, TRANSFER, TRANSFER_WRITE, COMPUTE, SSBO_RW)
                 .add(bins, 0, LodComputeLayout.TRANSLUCENT_BIN_BYTES, TRANSFER, TRANSFER_WRITE, COMPUTE, SSBO_RW)
-                // Visibility is produced by the previous frame's compute and fragment (cull) writes, and on first use
-                // by the initial fill; every later stage in this frame reads/writes it.
+                // Node visibility is produced by the previous frame's compute writes; section visibility also by the
+                // previous frame's cull fragment writes. First use gets the initial fill; later stages read/write both.
                 .addWhole(visibility, TRANSFER | COMPUTE | FRAGMENT, TRANSFER_WRITE | SSBO_WRITE,
+                        COMPUTE | VERTEX | FRAGMENT, SSBO_RW)
+                .addWhole(sectionVisibility, TRANSFER | COMPUTE | FRAGMENT, TRANSFER_WRITE | SSBO_WRITE,
                         COMPUTE | VERTEX | FRAGMENT, SSBO_RW)
                 .addWhole(queueMetadata[frame], HOST, HOST_WRITE, COMPUTE | DRAW_INDIRECT, SSBO_RW | INDIRECT_READ)
                 .add(slot.traversalUniform(), 0, TraversalSceneUniform.BYTE_SIZE, HOST, HOST_WRITE, COMPUTE,
@@ -572,7 +595,7 @@ public final class LodComputeExecutor implements AutoCloseable {
     private void recordCommandGeneration(VkCommandBuffer cb, LodFrameBuffers slot, int frame) {
         // The cull raster's fragment visibility writes must be visible to cmdgen's reads.
         new SyncBatch()
-                .addWhole(visibility, COMPUTE | FRAGMENT, SSBO_WRITE, COMPUTE, SSBO_RW)
+                .addWhole(sectionVisibility, COMPUTE | FRAGMENT, SSBO_WRITE, COMPUTE, SSBO_RW)
                 .record(cb);
 
         GpuBuffer control = slot.drawControl();
@@ -670,6 +693,7 @@ public final class LodComputeExecutor implements AutoCloseable {
             queueMetadata[i].close();
         }
         visibility.close();
+        sectionVisibility.close();
     }
 
     private static ComputePipeline.Binding ssbo(int binding) {

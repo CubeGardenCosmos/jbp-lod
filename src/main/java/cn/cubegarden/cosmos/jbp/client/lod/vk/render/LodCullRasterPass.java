@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeExecutor;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
@@ -22,8 +24,6 @@ import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL;
 import static org.lwjgl.vulkan.VK10.VK_INDEX_TYPE_UINT16;
 import static org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer;
 import static org.lwjgl.vulkan.VK10.vkCmdDrawIndexedIndirect;
-import static org.lwjgl.vulkan.VK13.vkCmdBeginRendering;
-import static org.lwjgl.vulkan.VK13.vkCmdEndRendering;
 
 /**
  * Upstream occlusion-test raster ({@code cull/raster.vert|frag}): one instanced AABB cube per
@@ -75,13 +75,13 @@ final class LodCullRasterPass implements AutoCloseable {
                     .pDepthAttachment(depth);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(target.width(), target.height());
-            vkCmdBeginRendering(commandBuffer, rendering);
+            vkCmdBeginRenderingKHR(commandBuffer, rendering);
         }
         pipeline.bind(commandBuffer, frameSlot, 0, 0, target.width(), target.height());
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexedIndirect(commandBuffer, slot.drawControl().handle(),
                 LodComputeExecutor.CULL_COMMAND_OFFSET, 1, CULL_COMMAND_STRIDE);
-        vkCmdEndRendering(commandBuffer);
+        vkCmdEndRenderingKHR(commandBuffer);
     }
 
     @Override

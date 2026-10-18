@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.model;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -24,7 +25,6 @@ import static org.lwjgl.vulkan.VK10.vkAllocateCommandBuffers;
 import static org.lwjgl.vulkan.VK10.vkBeginCommandBuffer;
 import static org.lwjgl.vulkan.VK10.vkCreateCommandPool;
 import static org.lwjgl.vulkan.VK10.vkGetPhysicalDeviceFormatProperties;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
 
 /** Small Vulkan helpers shared by the model atlas and baker; render-thread only. */
 final class ModelVk {
@@ -82,7 +82,7 @@ final class ModelVk {
                     .baseArrayLayer(0).layerCount(1);
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack).sType$Default()
                     .pImageMemoryBarriers(barrier);
-            vkCmdPipelineBarrier2(command, dependency);
+            vkCmdPipelineBarrier2KHR(command, dependency);
         }
     }
 

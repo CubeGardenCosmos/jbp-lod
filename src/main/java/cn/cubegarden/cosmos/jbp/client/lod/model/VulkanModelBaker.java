@@ -1,5 +1,8 @@
 package cn.cubegarden.cosmos.jbp.client.lod.model;
 
+import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
+import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuCompletion;
@@ -143,7 +146,6 @@ import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_READ_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT;
-import static org.lwjgl.vulkan.VK13.VK_DYNAMIC_STATE_FRONT_FACE;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COPY_BIT;
@@ -152,10 +154,6 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_NONE;
-import static org.lwjgl.vulkan.VK13.vkCmdBeginRendering;
-import static org.lwjgl.vulkan.VK13.vkCmdEndRendering;
-import static org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2;
-import static org.lwjgl.vulkan.VK13.vkCmdSetFrontFace;
 
 /**
  * Rasterises block-model faces on the game's Vulkan device and reads the six 16x16 faces back in the
@@ -427,7 +425,7 @@ final class VulkanModelBaker implements AutoCloseable {
                         .srcStageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT).srcAccessMask(VK_ACCESS_2_MEMORY_WRITE_BIT)
                         .dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
                         .dstAccessMask(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                vkCmdPipelineBarrier2(command, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(memory));
+                vkCmdPipelineBarrier2KHR(command, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(memory));
 
                 long colourStages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 long colourAccess = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -458,7 +456,7 @@ final class VulkanModelBaker implements AutoCloseable {
                         .pColorAttachments(colours).pDepthAttachment(depthAttachment);
                 rendering.renderArea().offset().set(0, 0);
                 rendering.renderArea().extent().set(TARGET_WIDTH, TARGET_HEIGHT);
-                vkCmdBeginRendering(command, rendering);
+                vkCmdBeginRenderingKHR(command, rendering);
 
                 vkCmdBindVertexBuffers(command, 0, stack.longs(vertices.handle()), stack.longs(0L));
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, core.pipelineLayout, 0,
@@ -479,20 +477,21 @@ final class VulkanModelBaker implements AutoCloseable {
                     // Views 1, 2, 4 are mirrored; upstream keeps CW-in-NDC there and CCW-in-NDC elsewhere.
                     // Vulkan's framebuffer is y-down, so NDC-CCW is Vulkan-CLOCKWISE.
                     boolean mirrored = face == 1 || face == 2 || face == 4;
-                    vkCmdSetFrontFace(command, mirrored ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE);
+                    long opaquePipeline = mirrored ? core.opaqueMirroredPipeline : core.opaquePipeline;
+                    long translucentPipeline = mirrored ? core.translucentMirroredPipeline : core.translucentPipeline;
                     VIEWS[face].get(0, matrix);
                     vkCmdPushConstants(command, core.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, matrix);
                     int first = offsets.get(view.vertices()) / VERTEX_BYTES;
                     if (view.opaqueVertexCount() > 0) {
-                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, core.opaquePipeline);
+                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline);
                         vkCmdDraw(command, view.opaqueVertexCount(), 1, first, 0);
                     }
                     if (view.translucentVertexCount() > 0) {
-                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, core.translucentPipeline);
+                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, translucentPipeline);
                         vkCmdDraw(command, view.translucentVertexCount(), 1, first + view.opaqueVertexCount(), 0);
                     }
                 }
-                vkCmdEndRendering(command);
+                vkCmdEndRenderingKHR(command);
 
                 ModelVk.imageBarrier(command, colour, 0, 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -516,7 +515,7 @@ final class VulkanModelBaker implements AutoCloseable {
                         .dstStageMask(VK_PIPELINE_STAGE_2_HOST_BIT).dstAccessMask(VK_ACCESS_2_HOST_READ_BIT)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .buffer(readback.handle()).offset(0).size(READBACK_BYTES);
-                vkCmdPipelineBarrier2(command, VkDependencyInfo.calloc(stack).sType$Default()
+                vkCmdPipelineBarrier2KHR(command, VkDependencyInfo.calloc(stack).sType$Default()
                         .pBufferMemoryBarriers(toHost));
                 ModelVk.check(vkEndCommandBuffer(command), "vkEndCommandBuffer(model bake)");
             }
@@ -591,6 +590,8 @@ final class VulkanModelBaker implements AutoCloseable {
         private long pipelineLayout;
         private long opaquePipeline;
         private long translucentPipeline;
+        private long opaqueMirroredPipeline;
+        private long translucentMirroredPipeline;
         private boolean closed;
 
         private Core(GameVulkan.Snapshot game, ShaderCompiler compiler, long sourceView) {
@@ -691,7 +692,7 @@ final class VulkanModelBaker implements AutoCloseable {
                         .depthCompareOp(VK_COMPARE_OP_LESS).depthBoundsTestEnable(false).stencilTestEnable(false);
                 VkPipelineDynamicStateCreateInfo dynamic = VkPipelineDynamicStateCreateInfo.calloc(stack)
                         .sType$Default().pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT,
-                                VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_FRONT_FACE));
+                                VK_DYNAMIC_STATE_SCISSOR));
                 VkPipelineRenderingCreateInfo rendering = VkPipelineRenderingCreateInfo.calloc(stack).sType$Default()
                         .pColorAttachmentFormats(stack.ints(VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM))
                         .depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
@@ -721,6 +722,16 @@ final class VulkanModelBaker implements AutoCloseable {
                 ModelVk.check(vkCreateGraphicsPipelines(device, 0L, info, null, handle),
                         "vkCreateGraphicsPipelines(model translucent)");
                 translucentPipeline = handle.get(0);
+                // Front face is pipeline state (VK_EXT_extended_dynamic_state is not enabled on the game device):
+                // mirrored views use CCW variants. Blend state is still enabled here for the translucent variant.
+                raster.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                ModelVk.check(vkCreateGraphicsPipelines(device, 0L, info, null, handle),
+                        "vkCreateGraphicsPipelines(model translucent mirrored)");
+                translucentMirroredPipeline = handle.get(0);
+                attachments.get(0).blendEnable(false);
+                ModelVk.check(vkCreateGraphicsPipelines(device, 0L, info, null, handle),
+                        "vkCreateGraphicsPipelines(model opaque mirrored)");
+                opaqueMirroredPipeline = handle.get(0);
             } finally {
                 if (fragmentModule != 0) vkDestroyShaderModule(device, fragmentModule, null);
                 if (vertexModule != 0) vkDestroyShaderModule(device, vertexModule, null);
@@ -740,6 +751,8 @@ final class VulkanModelBaker implements AutoCloseable {
                 return;
             }
             closed = true;
+            if (translucentMirroredPipeline != 0) vkDestroyPipeline(device, translucentMirroredPipeline, null);
+            if (opaqueMirroredPipeline != 0) vkDestroyPipeline(device, opaqueMirroredPipeline, null);
             if (translucentPipeline != 0) vkDestroyPipeline(device, translucentPipeline, null);
             if (opaquePipeline != 0) vkDestroyPipeline(device, opaquePipeline, null);
             if (pipelineLayout != 0) vkDestroyPipelineLayout(device, pipelineLayout, null);

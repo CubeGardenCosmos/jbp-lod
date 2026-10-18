@@ -41,7 +41,8 @@ class ShaderCompilerCoverageTest {
             assertTrue(shader.trace().spirvSha256().matches("[0-9a-f]{64}"), shaderCase.path());
             assertTrue(shader.trace().sourceSha256().containsKey(shaderCase.path()), shaderCase.path());
             assertNotNull(shader.reflection(), shaderCase.path());
-            if (!shaderCase.path().equals("hiz/blit.vert") && !shaderCase.path().equals("lod/depth_convert.vert")) {
+            if (!shaderCase.path().equals("hiz/blit.vert") && !shaderCase.path().equals("lod/depth_convert.vert")
+                    && !shaderCase.path().equals("model/bake.vert")) {
                 assertFalse(shader.reflection().descriptors().isEmpty(),
                         shaderCase.path() + " should reflect Vulkan descriptors");
             }
@@ -74,6 +75,8 @@ class ShaderCompilerCoverageTest {
                 withDefines(traversalDefines, Map.of("HAS_STATISTICS", "1", "STATISTICS_BUFFER_BINDING", "9"))));
         cases.add(new ShaderCase("lod/hierarchical/traversal_dev.comp",
                 withDefines(traversalDefines, Map.of("USE_REVERSE_Z", "1", "USE_ZERO_ONE_DEPTH", "1"))));
+        cases.add(new ShaderCase("lod/hierarchical/traversal_dev.comp",
+                withDefines(traversalDefines, Map.of("USE_REVERSE_Z", "1"))));
         Map<String, String> reverseZ = Map.of("USE_REVERSE_Z", "1", "USE_ZERO_ONE_DEPTH", "1");
         cases.add(new ShaderCase("hiz/hiz.comp", Map.of()));
         cases.add(new ShaderCase("hiz/hiz.comp", reverseZ));
@@ -148,6 +151,10 @@ class ShaderCompilerCoverageTest {
         cases.add(new ShaderCase("lod/gl46/cull/raster.vert", Map.of("TAA", "1"),
                 "\nvec2 getTAA() { return vec2(float(gl_VertexIndex & 1), 0.0) * 0.125; }\n"));
         cases.add(new ShaderCase("lod/gl46/cull/raster.frag", Map.of()));
+        cases.add(new ShaderCase("lod/gl46/cull/raster.vert", Map.of("USE_REVERSE_Z", "1")));
+        cases.add(new ShaderCase("lod/gl46/cull/raster.frag", Map.of("USE_REVERSE_Z", "1")));
+        cases.add(new ShaderCase("model/bake.vert", Map.of()));
+        cases.add(new ShaderCase("model/bake.frag", Map.of()));
         return List.copyOf(cases);
     }
 
