@@ -5,8 +5,6 @@ import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.data.tree.SectionDelta;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.caps.DeviceCaps;
-import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuCompletion;
-import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuRetireQueue;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodFrameBuffers;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodGpuBuffers;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodNodeGpuBuffers;
@@ -106,7 +104,7 @@ public final class LodRuntime {
             //Nothing was submitted yet, so immediate destruction is safe
             if (createdFrames != null) createdFrames.close();
             if (createdExecutor != null) createdExecutor.close();
-            if (createdNodes != null) createdNodes.retireAndClose(snapshot);
+            if (createdNodes != null) createdNodes.close();
             throw failure;
         }
         this.game = snapshot;
@@ -286,9 +284,12 @@ public final class LodRuntime {
         if (gpuReady) {
             gpuReady = false;
             try {
-                frameBuffers.close();
-                GpuRetireQueue.retire(GpuCompletion.submitMarker(game), executor);
-                nodeBuffers.retireAndClose(game);
+                LodComputeExecutor retiredExecutor = executor;
+                LodNodeGpuBuffers retiredNodes = nodeBuffers;
+                frameBuffers.closeAfterRetirement(() -> {
+                    retiredExecutor.close();
+                    retiredNodes.close();
+                });
             } catch (RuntimeException | Error failure) {
                 LOGGER.error("[JBP-LOD] GPU teardown failed; continuing with storage release.", failure);
             }

@@ -4,6 +4,8 @@
   "package": "cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.mixin",
   "compatibilityLevel": "JAVA_17",
   "client": [
+    "MixinClientLevelIngest",
+    "MixinClientChunkCacheIngest",
     "FrontendGpuDeviceAccessor",
     "VulkanDeviceAccessor",
     "FrontendRenderPassAccessor",
@@ -11,6 +13,7 @@
     "StairBlockAccessor",
     "SpriteContentsAccessor",
     "MixinVulkanDevice",
+    "MixinVulkanCommandEncoder",
     "MixinDefaultChunkRenderer"
   ],
   "injectors": {

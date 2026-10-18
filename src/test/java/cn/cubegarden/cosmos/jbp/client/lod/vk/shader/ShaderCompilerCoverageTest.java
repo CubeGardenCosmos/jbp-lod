@@ -86,6 +86,7 @@ class ShaderCompilerCoverageTest {
         cases.add(new ShaderCase("hiz/blit.frag", Map.of("OUTPUT_COLOUR", "1")));
         cases.add(new ShaderCase("lod/depth_convert.vert", Map.of()));
         cases.add(new ShaderCase("lod/depth_convert.frag", Map.of()));
+        cases.add(new ShaderCase("lod/offscreen_composite.frag", Map.of()));
         cases.add(new ShaderCase("hiz/blit.frag",
                 withDefines(Map.of("OUTPUT_COLOUR", "1"), reverseZ)));
 

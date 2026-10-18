@@ -1,0 +1,97 @@
+package cn.cubegarden.cosmos.jbp.client.lod.data.ingest;
+
+import cn.cubegarden.cosmos.jbp.client.lod.data.IdMapper;
+import cn.cubegarden.cosmos.jbp.client.lod.data.tree.SectionPos;
+import cn.cubegarden.cosmos.jbp.client.lod.runtime.LodSession;
+import net.minecraft.core.Holder;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import org.slf4j.LoggerFactory;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * Snapshot ownership fixes upstream VoxelIngestService's mutable section handoff. Conversion follows
+ * sealed Voxy WorldConversionFactory: air canonicalization, quart-biomes and sky | block << 4 light.
+ * Mapping/NBT, hierarchy reads/modification/writes and notifications run exclusively on a worker.
+ */
+public final class LiveSectionProducer {
+    private final LodSession session;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "JBP-LOD voxel ingest"); thread.setDaemon(true); return thread;
+    });
+    private boolean closed;
+    public LiveSectionProducer(LodSession session) { this.session = session; }
+
+    /** Called only on the game thread; no live mutable chunk state escapes this method. */
+    public synchronized void capture(LevelChunk chunk) {
+        if (closed) return;
+        var light = chunk.getLevel().getLightEngine();
+        int sectionY = chunk.getMinSectionY();
+        for (var section : chunk.getSections()) {
+            int y = sectionY++;
+            if (section == null) continue;
+            BlockState[] states = new BlockState[4096];
+            @SuppressWarnings("unchecked") Holder<Biome>[] biomes = (Holder<Biome>[]) new Holder<?>[64];
+            for (int i = 0; i < 4096; i++) states[i] = section.getStates().get(i & 15, i >> 8, (i >> 4) & 15);
+            for (int i = 0; i < 64; i++) biomes[i] = section.getBiomes().get(i & 3, i >> 4, (i >> 2) & 3);
+            var pos = net.minecraft.core.SectionPos.of(chunk.getPos(), y);
+            var block = light.getLayerListener(LightLayer.BLOCK).getDataLayerData(pos);
+            var sky = light.getLayerListener(LightLayer.SKY).getDataLayerData(pos);
+            var blockCopy = block == null ? null : block.copy();
+            var skyCopy = sky == null ? null : sky.copy();
+            int x = chunk.getPos().x(), z = chunk.getPos().z();
+            worker.execute(() -> {
+                try {
+                    long[] words = new long[4096];
+                    IdMapper mapper = session.mapper();
+                    for (int i = 0; i < words.length; i++) {
+                        int vx = i & 15, vy = i >> 8, vz = (i >> 4) & 15;
+                        int illumination = (skyCopy == null ? 0 : Math.min(15, skyCopy.get(vx, vy, vz)))
+                                | ((blockCopy == null ? 0 : Math.min(15, blockCopy.get(vx, vy, vz))) << 4);
+                        words[i] = mapper.getBaseId((byte) illumination, states[i], biomes[(vx >> 2) | (vz >> 2) << 2 | (vy >> 2) << 4]);
+                    }
+                    writeHierarchy(x, y, z, words);
+                } catch (RuntimeException failure) {
+                    LoggerFactory.getLogger("jbp-lod").warn("[JBP-LOD] Section ingest failed", failure);
+                }
+            });
+        }
+    }
+
+    private void writeHierarchy(int x, int y, int z, long[] source) {
+        int sectionX = x, sectionY = y, sectionZ = z;
+        for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
+            long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
+            byte[] stored = session.storage().getSectionData(key).join();
+            long[] target = stored == null ? new long[StoredVoxelSection.VOXELS] : StoredVoxelSection.decode(stored);
+            VoxelHierarchy.insert(target, source, level, sectionX, sectionY, sectionZ);
+            session.storage().setSectionData(key, StoredVoxelSection.encode(target)).join();
+            byte children = VoxelHierarchy.children(target);
+            if (level == 0 && children != 0) children = (byte) 0xFF;
+            session.nodes().onSectionUpdated(key, SectionPos.DEFAULT_UPDATE_FLAGS, children);
+            int sx = x >> 1, sy = y >> 1, sz = z >> 1;
+            for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
+                long adjacent = SectionPos.pack(level, sx + (axis == 0 ? sign : 0),
+                        sy + (axis == 1 ? sign : 0), sz + (axis == 2 ? sign : 0));
+                session.nodes().onSectionUpdated(adjacent, SectionPos.UPDATE_TYPE_BLOCK_BIT, (byte) 0);
+            }
+            if (level < SectionPos.MAX_LOD_LAYER)
+                source = VoxelHierarchy.downsample(source, 16 >> level, session.mapper()::getBlockStateOpacity);
+            x >>= 1; y >>= 1; z >>= 1;
+        }
+    }
+
+    /** Drain accepted snapshots before closing storage; never waits on the game/render thread. */
+    public synchronized CompletableFuture<Void> closeAsync() {
+        if (closed) return CompletableFuture.completedFuture(null);
+        closed = true;
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        worker.execute(() -> done.complete(null));
+        worker.shutdown();
+        return done;
+    }
+}

@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.mixin;
 
+import cn.cubegarden.cosmos.jbp.client.lod.JbpLodClient;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.VulkanBridgeProbe;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.render.VulkanLodRenderer;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
@@ -34,6 +35,23 @@ public abstract class MixinDefaultChunkRenderer {
     private VulkanLodRenderer.Frame jbpLod$lodFrame;
 
     /**
+     * Sodium prepares every pass even for an empty render list, then skips render's body when
+     * shouldDraw is false. Keep CUTOUT's begin/end scope reachable without nearby terrain.
+     * The probe deliberately does not depend on the renderer property or an active LOD scope.
+     */
+    @Inject(method = "prepare(Lnet/caffeinemc/mods/sodium/client/render/chunk/lists/ChunkRenderListIterable;Lnet/caffeinemc/mods/sodium/client/render/viewport/CameraTransform;Z)V",
+            at = @At("TAIL"))
+    private void jbpLod$keepCutoutReachable(ChunkRenderListIterable renderLists,
+                                            CameraTransform camera,
+                                            boolean indexedRenderingEnabled,
+                                            CallbackInfo ci) {
+        if (VulkanBridgeProbe.enabled()
+                || (VulkanLodRenderer.enabled() && JbpLodClient.activeRuntime().isPresent())) {
+            this.shouldDraw[DefaultTerrainRenderPasses.getPassIndex(DefaultTerrainRenderPasses.CUTOUT)] = true;
+        }
+    }
+
+    /**
      * HEAD of the CUTOUT terrain render: the V1 probe (opt-in, independent of V4) and the V4 LOD
      * pre-pass, which records and submits its own command buffer ahead of the game's.
      */
@@ -52,8 +70,7 @@ public abstract class MixinDefaultChunkRenderer {
                                                    CallbackInfo ci) {
         this.jbpLod$probeFrame = null;
         this.jbpLod$lodFrame = null;
-        if (renderPass == DefaultTerrainRenderPasses.CUTOUT
-                && this.shouldDraw[DefaultTerrainRenderPasses.getPassIndex(DefaultTerrainRenderPasses.CUTOUT)]) {
+        if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
             if (VulkanBridgeProbe.enabled()) {
                 this.jbpLod$probeFrame = VulkanBridgeProbe.beforeCutout(matrices, renderPass, pass);
             }

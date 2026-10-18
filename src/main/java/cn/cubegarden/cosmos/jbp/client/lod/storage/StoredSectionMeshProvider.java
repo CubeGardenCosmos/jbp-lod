@@ -135,7 +135,8 @@ public final class StoredSectionMeshProvider implements LodNodeService.MeshReque
         }
         boolean[] again = {false};
         inFlight.compute(position, (key, state) -> {
-            if (state != null && state && !closed && failure == null) {
+            if (state != null && state && !closed
+                    && (failure == null || failure instanceof CancellationException)) {
                 again[0] = true;
                 return Boolean.FALSE;
             }

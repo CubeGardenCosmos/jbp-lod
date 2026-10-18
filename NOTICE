@@ -148,6 +148,20 @@ V4 HiZ, compute and raster integration
 - vk/render/LodDepthConvertPass.java replaces the role of the upstream depth
   copy/one-frame-latent HiZ input; its Vulkan projection conversion, resources
   and barriers are new implementation rather than a GL command translation.
+- vk/render/{LodColorTarget.java,LodOffscreenPass.java} and
+  lod/offscreen_composite.frag (shader path)
+  <- client/core/NormalRenderPipeline.java (setup/finish),
+  client/core/AbstractRenderPipeline.java (transformBlitDepth), and
+  post/blit_texture_depth_cutout.frag: conceptual offscreen colour/depth target,
+  composite and reprojected-depth behavior. These are new Vulkan implementations,
+  not copied upstream text; projection mapping uses the project's LodDepthConversion.
+- vk/render/{LodOpaqueHistory.java,LodDrawSequence.java}
+  <- client/core/rendering/section/backend/mdic/MDICSectionRenderer.java and
+  client/core/AbstractRenderPipeline.java: previous opaque rendering before
+  HiZ/traversal/cull/command generation, then temporal newly visible opaque,
+  translucent and composite stages. The Vulkan implementation retains previous
+  opaque commands/positions through GPU-side copies without CPU readback.
+  vk/render/LodResourceLifetime.java is original project lease/ownership logic.
 
 V4 model bakery and atlas
 -------------------------
@@ -186,6 +200,10 @@ Upstream model paths in this section are under client/core/model/.
 - vk/bridge/mixin/{SpriteContentsAccessor.java,StairBlockAccessor.java}
   replace the upstream access-widener access to SpriteContents.mipmapStrategy
   and StairBlock.baseState used by the model bakery/tint logic.
+- vk/bridge/mixin/MixinDefaultChunkRenderer.java
+  <- client/mixin/sodium/MixinDefaultChunkRenderer.java: prepare-TAIL CUTOUT
+  shouldDraw forcing keeps the LOD hook reachable without nearby terrain.
+  Probe activation and Vulkan render-scope submission are project adaptations.
 
 Vulkan device ownership, allocation wrappers, retirement/barrier machinery,
 RenderPearl/Sodium bridge hooks and scope/storage-worker plumbing are project
@@ -193,3 +211,25 @@ integration code; using an upstream-format buffer does not imply a copied
 upstream GL resource implementation. Tests of these ports and ABI contracts do
 not establish game/GPU correctness. Game/GPU evidence remains:
 pending: game smoke deferred by user
+
+V3 live section ingest and section meshing
+-----------------------------------------
+- compute/SectionMesherCore.java
+  <- client/core/rendering/building/RenderDataFactory.java: voxel face generation,
+  model/fluid occlusion, packed quads, AABB and face-range ordering.
+- compute/ScanMesher2D.java <- client/core/util/ScanMesher2D.java:
+  upstream scanline quad merging; standalone demonstrations are omitted.
+- compute/SectionMesher.java adapts those algorithms to stored voxel snapshots,
+  neighboring section reads and published JBP-LOD model IDs.
+- data/ingest/LiveSectionProducer.java
+  <- common/voxelization/WorldConversionFactory.java,
+  common/world/service/VoxelIngestService.java and common/world/WorldUpdater.java:
+  block/biome/light conversion and asynchronous hierarchical updates.
+- data/ingest/VoxelHierarchy.java <- common/world/other/Mipper.java and
+  common/world/WorldUpdater.java: opacity/tie/light mip rules and octant updates.
+- vk/bridge/mixin/MixinClientLevelIngest.java derives the client dirty-section
+  ingest-hook behavior from client/mixin/minecraft/MixinClientLevel.java.
+  The light/biome cache hooks, Fabric loaded-chunk ledger, immutable snapshots,
+  producer-drain lifecycle and data/ingest/StoredVoxelSection.java payload codec
+  are project integration. The codec is not SaveLoadSystem3 file compatibility.
+  Fixed-input mesher/hierarchy tests do not establish game/GPU acceptance.

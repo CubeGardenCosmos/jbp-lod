@@ -47,8 +47,11 @@ public final class LodSession {
     private final RenderDistanceTracker distanceTracker;
     private final IdMapper mapper;
     private final ModelProvider models;
+    private final cn.cubegarden.cosmos.jbp.client.lod.compute.SectionMesher mesher;
     private int renderDistanceSections = DEFAULT_RENDER_DISTANCE_SECTIONS;
     private boolean closing;
+    private CompletableFuture<Void> ingestDrain = CompletableFuture.completedFuture(null);
+    private CompletableFuture<Void> closingFuture;
 
     /**
      * Builds the session around an opened storage session; MUST run on the storage thread (it reads the
@@ -97,6 +100,8 @@ public final class LodSession {
             throw failure;
         }
         this.sections.bind(nodes);
+        this.mesher = new cn.cubegarden.cosmos.jbp.client.lod.compute.SectionMesher(models, storage);
+        this.sections.setMesher(mesher);
         this.distanceTracker = new RenderDistanceTracker(TOP_LEVEL_OPERATIONS_PER_FRAME, minSec, maxSec,
                 nodes::insertTopLevelNode, nodes::removeTopLevelNode);
         this.distanceTracker.setRenderDistance(renderDistanceSections + 1);//the +1 covers the outer ring
@@ -147,7 +152,7 @@ public final class LodSession {
         return models;
     }
 
-    /** Stored-section source that answers node mesh requests; install a mesher with {@code setMesher}. */
+    /** Stored-section source with the upstream CPU mesher installed. */
     public StoredSectionMeshProvider sections() {
         return sections;
     }
@@ -167,6 +172,7 @@ public final class LodSession {
 
     /** Render thread: feeds the camera position to the top-level node tracker. */
     public boolean updateCamera(double x, double z) {
+        mesher.retryReady(models.epoch(), sections::request);
         return distanceTracker.setCenterAndProcess(x, z);
     }
 
@@ -182,18 +188,27 @@ public final class LodSession {
         storage.closeNow();
     }
 
+    /** Registers the stopped producer's drain before render-thread runtime teardown. */
+    public synchronized void setIngestDrain(CompletableFuture<Void> drain) {
+        if (closing) throw new IllegalStateException("session is closing");
+        ingestDrain = java.util.Objects.requireNonNull(drain, "drain");
+    }
+
     /**
      * Stops producers, then closes storage (flush, RocksDB, scope lock) on the I/O executor after queued
      * operations. Never blocks the caller; the returned future completes when the scope is released.
      */
     public synchronized CompletableFuture<Void> closeAsync() {
         if (closing) {
-            return storage.closeAsync();
+            return closingFuture == null ? storage.closeAsync() : closingFuture;
         }
         closing = true;
         sections.close();
-        nodes.close();
         meshExecutor.shutdownNow();
-        return storage.closeAsync();
+        closingFuture = ingestDrain.handle((unused, failure) -> null).thenCompose(unused -> {
+            nodes.close();
+            return storage.closeAsync();
+        });
+        return closingFuture;
     }
 }

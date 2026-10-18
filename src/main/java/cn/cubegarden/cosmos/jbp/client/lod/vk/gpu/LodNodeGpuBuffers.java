@@ -222,22 +222,16 @@ public final class LodNodeGpuBuffers {
         return () -> batch.forEach(StagingBuffer::close);
     }
 
-    /** Defers destruction to a fence marker that follows all previously submitted uses. */
-    public void retireAndClose(GameVulkan.Snapshot game) {
-        if (closed) {
-            return;
-        }
+    /** Destroys allocations only after the owning frame ring has retired every consuming slot. */
+    public void close() {
+        if (closed) return;
         closed = true;
-        List<StagingBuffer> staging = new ArrayList<>(pendingStaging);
+        pendingStaging.forEach(StagingBuffer::close);
         pendingStaging.clear();
-        GpuRetireQueue.retire(GpuCompletion.submitMarker(game), () -> {
-            staging.forEach(StagingBuffer::close);
-            geometry.close();
-            sectionMetadata.close();
-            topLevelIds.close();
-            nodes.close();
-        });
-        GpuRetireQueue.poll(game);
+        geometry.close();
+        sectionMetadata.close();
+        topLevelIds.close();
+        nodes.close();
     }
 
     //==================================================================================================================

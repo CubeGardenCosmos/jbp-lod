@@ -16,6 +16,7 @@ import java.util.List;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -119,10 +120,10 @@ public final class LodFrameBuffers implements AutoCloseable {
         GpuBuffer createdPrefixScratch = null;
         try {
             createdDrawCommands = buffer(game, (long) MAX_DRAW_COMMANDS * 20,
-                    storageTransfer | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+                    storageTransfer | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
             createdDrawControl = buffer(game, 44,
-                    storageTransfer | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-            createdPositionScratch = buffer(game, maxSections * 8, storageTransfer);
+                    storageTransfer | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+            createdPositionScratch = buffer(game, maxSections * 8, storageTransfer | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
             createdTranslucentScratch = buffer(game,
                     (long) (TRANSLUCENT_DISTANCE_BINS + TRANSLUCENT_COMMAND_CAPACITY) * Integer.BYTES,
                     storageTransfer);

@@ -1,5 +1,8 @@
 package cn.cubegarden.cosmos.jbp.client.lod;
 
+import cn.cubegarden.cosmos.jbp.client.lod.data.ingest.LiveChunkCapture;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.multiplayer.ClientLevel;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.runtime.LodRuntime;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.render.VulkanLodRenderer;
@@ -49,6 +52,8 @@ public final class JbpLodClient implements ClientModInitializer {
     private static final Object STATE = new Object();
     private static LodRuntime activeRuntime;
     private static long startToken;
+    private static ClientLevel sessionLevel;
+    private static CompletableFuture<Void> pendingRelease = CompletableFuture.completedFuture(null);
 
     /**
      * The runtime of the active scope, once its storage session has opened; empty while inactive, while the
@@ -66,6 +71,14 @@ public final class JbpLodClient implements ClientModInitializer {
         LOGGER.info("[JBP-LOD] Initialized client scope + storage session support (Minecraft 26.3 / Java 25).");
         ModelProvider.registerLifecycle();
         VulkanLodRenderer.registerLifecycle();
+        LiveChunkCapture.register();
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.level != sessionLevel) {
+                if (client.level == null) stopSession("world unloaded");
+                else startSession(client);
+            }
+            LiveChunkCapture.tick(client.level, activeRuntime().orElse(null));
+        });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> startSession(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> stopSession("server disconnect"));
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
@@ -80,6 +93,7 @@ public final class JbpLodClient implements ClientModInitializer {
     }
 
     private static void startSession(Minecraft client) {
+        sessionLevel = client.level;
         long token;
         synchronized (STATE) {
             token = ++startToken;
@@ -118,7 +132,8 @@ public final class JbpLodClient implements ClientModInitializer {
         StartRequest request = new StartRequest(singleplayer, developmentEnvironment, developmentScopeId,
                 developmentNodeId, worldId, nodeId, configuredBase(), FabricLoader.getInstance().getGameDir(),
                 dimension, minSection, maxSection);
-        STORAGE_IO.execute(() -> openOnStorageThread(request, token));
+        pendingRelease.handle((ignored, failure) -> null)
+                .thenRun(() -> STORAGE_IO.execute(() -> openOnStorageThread(request, token)));
     }
 
     /** Runs on the storage thread: scope lock, RocksDB open, node/section session, publication. */
@@ -207,6 +222,8 @@ public final class JbpLodClient implements ClientModInitializer {
     }
 
     private static void stopSession(String reason) {
+        sessionLevel = null;
+        LiveChunkCapture.clear();
         synchronized (STATE) {
             startToken++;//Invalidates any scope/session still opening on the storage thread
         }
@@ -215,6 +232,7 @@ public final class JbpLodClient implements ClientModInitializer {
 
     /** Game thread: queues GPU retirement, then storage close + scope release on the storage thread. */
     private static void closeActiveRuntime(String reason) {
+        CompletableFuture<Void> drained = LiveChunkCapture.detach();
         LodRuntime previous;
         synchronized (STATE) {
             previous = activeRuntime;
@@ -223,7 +241,9 @@ public final class JbpLodClient implements ClientModInitializer {
         if (previous == null) {
             return;
         }
+        previous.session().setIngestDrain(drained);
         CompletableFuture<Void> released = previous.close();
+        pendingRelease = CompletableFuture.allOf(pendingRelease, released);
         released.whenComplete((ignored, failure) -> {
             if (failure != null) {
                 LOGGER.warn("[JBP-LOD] Failed to release scope on {}.", reason, failure);
@@ -234,6 +254,7 @@ public final class JbpLodClient implements ClientModInitializer {
     }
 
     private static void awaitStorageShutdown() {
+        pendingRelease.handle((ignored, failure) -> null).join();
         STORAGE_IO.shutdown();
         try {
             if (!STORAGE_IO.awaitTermination(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {

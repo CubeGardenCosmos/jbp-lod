@@ -3,17 +3,17 @@ package cn.cubegarden.cosmos.jbp.client.lod.vk.gpu;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.util.ArrayList;
-import java.util.List;
-
-/** Owns a bounded ring of frame outputs; a slot is reused only after a queued fence signals. */
+/** Owns frame outputs until a fence queued after the consuming game submission signals. */
 public final class LodGpuBuffers implements AutoCloseable {
     private final GameVulkan.Snapshot game;
     private final LodFrameBuffers[] slots;
     private final GpuCompletion[] retirementFences;
-    private long activeFrameId = Long.MIN_VALUE;
+    private final FrameRetirement retirement;
+    private final Runnable submissionListener = this::afterGameSubmission;
     private int activeSlot = -1;
     private boolean closed;
+    private boolean destroyed;
+    private Runnable closeAction;
 
     public LodGpuBuffers(GameVulkan.Snapshot game, int framesInFlight, int maxSections) {
         if (framesInFlight < 2 || framesInFlight > 4) {
@@ -22,52 +22,27 @@ public final class LodGpuBuffers implements AutoCloseable {
         this.game = game;
         this.slots = new LodFrameBuffers[framesInFlight];
         this.retirementFences = new GpuCompletion[framesInFlight];
+        this.retirement = new FrameRetirement(framesInFlight);
         int created = 0;
         try {
             for (; created < framesInFlight; created++) {
                 slots[created] = new LodFrameBuffers(game, maxSections, created);
             }
         } catch (RuntimeException | Error failure) {
-            for (int i = created - 1; i >= 0; i--) {
-                slots[i].close();
-            }
+            for (int i = created - 1; i >= 0; i--) slots[i].close();
             throw failure;
         }
-        GpuRetireQueue.poll(game);
+        GameVulkan.addSubmissionListener(submissionListener);
     }
 
-    /**
-     * Acquires a reusable slot without blocking. Repeated calls with the same frameId return
-     * the same slot; a null result means all slots are still in flight and the frame must skip LOD.
-     */
+    /** Nonblocking acquisition; use GameVulkan.frameId(), never a per-callback counter. */
     public LodFrameBuffers beginFrame(long frameId) {
         ensureOpen();
-        GpuRetireQueue.poll(game);
-        if (frameId == activeFrameId) {
-            return activeSlot < 0 ? null : slots[activeSlot];
-        }
-        if (activeSlot >= 0) {
-            LodFrameBuffers previous = slots[activeSlot];
-            if (previous.isRecording()) {
-                throw new IllegalStateException("previous LOD frame left its command buffer recording");
-            }
-            if (previous.isSubmitted() && retirementFences[activeSlot] == null) {
-                retirementFences[activeSlot] = GpuCompletion.submitMarker(game);
-            }
-        }
-        activeFrameId = frameId;
-        activeSlot = -1;
         pollSlots();
-        for (int i = 0; i < slots.length; i++) {
-            if (retirementFences[i] == null && !slots[i].isRecording() && !slots[i].isSubmitted()) {
-                activeSlot = i;
-                return slots[i];
-            }
-        }
-        return null;
+        activeSlot = retirement.beginFrame(frameId);
+        return activeSlot < 0 ? null : slots[activeSlot];
     }
 
-    /** Ends and submits the active slot's pre-cutout work to the game's existing graphics queue. */
     public void submitCommands(LodFrameBuffers slot) {
         ensureOpen();
         if (activeSlot < 0 || slots[activeSlot] != slot) {
@@ -75,63 +50,79 @@ public final class LodGpuBuffers implements AutoCloseable {
         }
         VkCommandBuffer commandBuffer = slot.endCommands();
         GpuCompletion.submitUntracked(game, commandBuffer);
+        retirement.submitted(activeSlot);
     }
 
-    /** Number of outputs available per frame slot. */
+    /** Retains a per-slot renderer lease through the actual consuming game submission. */
+    public void retireAfterUse(LodFrameBuffers slot, Runnable release) {
+        ensureOpen();
+        int index = slot.slotIndex();
+        if (index < 0 || index >= slots.length || slots[index] != slot) {
+            throw new IllegalArgumentException("slot does not belong to this ring");
+        }
+        retirement.retireAfterUse(index, release);
+    }
+
     public int framesInFlight() {
         return slots.length;
     }
 
-    @Override
-    public void close() {
-        if (closed) {
-            return;
-        }
-        if (activeSlot >= 0 && slots[activeSlot].isRecording()) {
-            throw new IllegalStateException("cannot retire LOD buffers while command recording is open");
-        }
-        if (activeSlot >= 0 && slots[activeSlot].isSubmitted() && retirementFences[activeSlot] == null) {
-            retirementFences[activeSlot] = GpuCompletion.submitMarker(game);
-        }
-        closed = true;
-        for (int i = 0; i < slots.length; i++) {
-            GpuCompletion completion = retirementFences[i];
-            if (completion == null && !slots[i].isSubmitted()) {
-                slots[i].close();
-            } else {
-                if (completion == null) {
-                    completion = GpuCompletion.submitMarker(game);
-                }
-                GpuRetireQueue.retire(completion, new RetiredFrame(slots[i]));
-                retirementFences[i] = null;
+    /** Only this boundary may enqueue retirement markers, including during deferred close. */
+    public void afterGameSubmission() {
+        if (destroyed) return;
+        int pending = retirement.afterGameSubmission();
+        for (int index = 0; index < slots.length; index++) {
+            if ((pending & (1 << index)) != 0) {
+                retirementFences[index] = GpuCompletion.submitMarker(game);
             }
         }
-        GpuRetireQueue.poll(game);
+        pollSlots();
+        finishCloseIfRetired();
+    }
+
+    @Override
+    public void close() {
+        closeAfterRetirement(null);
+    }
+
+    /** Stops acquisition now, destroys ring/runtime owners only after every submitted use retires. */
+    public void closeAfterRetirement(Runnable action) {
+        if (closed) return;
+        for (LodFrameBuffers slot : slots) {
+            if (slot.isRecording()) {
+                throw new IllegalStateException("cannot retire LOD buffers while command recording is open");
+            }
+        }
+        closed = true;
+        closeAction = action;
+        pollSlots();
+        finishCloseIfRetired();
     }
 
     private void pollSlots() {
+        GpuRetireQueue.poll(game);
         for (int i = 0; i < retirementFences.length; i++) {
             GpuCompletion completion = retirementFences[i];
-            if (completion == null || !completion.isComplete()) {
-                continue;
-            }
+            if (completion == null || !completion.isComplete()) continue;
             completion.close();
             retirementFences[i] = null;
             slots[i].markRetired();
+            retirement.retired(i);
         }
+    }
+
+    private void finishCloseIfRetired() {
+        if (!closed || destroyed) return;
+        for (int i = 0; i < slots.length; i++) {
+            if (retirement.hasPending(i)) return;
+        }
+        destroyed = true;
+        GameVulkan.removeSubmissionListener(submissionListener);
+        for (LodFrameBuffers slot : slots) slot.close();
+        if (closeAction != null) closeAction.run();
     }
 
     private void ensureOpen() {
-        if (closed) {
-            throw new IllegalStateException("LOD GPU buffers are closed");
-        }
-    }
-
-    private record RetiredFrame(LodFrameBuffers frame) implements AutoCloseable {
-        @Override
-        public void close() {
-            frame.markRetired();
-            frame.close();
-        }
+        if (closed) throw new IllegalStateException("LOD GPU buffers are closed");
     }
 }

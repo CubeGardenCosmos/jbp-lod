@@ -17,10 +17,42 @@ import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Collectors;
 
 /** Borrow-only view of the Vulkan device currently owned by Minecraft/RenderPearl. */
 public final class GameVulkan {
+    private static long frameId;
+    private static final List<Runnable> SUBMISSION_LISTENERS = new ArrayList<>();
+
+    /** Render-thread epoch, advanced only after the game's graphics submission boundary. */
+    public static long frameId() {
+        return frameId;
+    }
+
+    public static void addSubmissionListener(Runnable listener) {
+        SUBMISSION_LISTENERS.add(listener);
+    }
+
+    public static void removeSubmissionListener(Runnable listener) {
+        SUBMISSION_LISTENERS.remove(listener);
+    }
+
+    /** Called only by the locked backend submission mixin, after game graphics work is queued. */
+    public static void afterGameSubmission() {
+        frameId++;
+        pollSubmissionRetirements();
+    }
+
+    /** Polls after the backend's existing final graphics queue drain, without a new frame epoch. */
+    public static void pollSubmissionRetirements() {
+        // Reverse traversal permits a fully retired ring to unregister itself.
+        for (int i = SUBMISSION_LISTENERS.size() - 1; i >= 0; i--) {
+            SUBMISSION_LISTENERS.get(i).run();
+        }
+    }
+
     private GameVulkan() {
     }
 
