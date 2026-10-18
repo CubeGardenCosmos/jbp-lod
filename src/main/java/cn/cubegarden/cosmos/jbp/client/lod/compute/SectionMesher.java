@@ -25,6 +25,8 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
     /** Expected asynchronous bakery dependency, not a malformed section or fabricated empty mesh. */
     static final class ModelNotReady extends CancellationException {
         final int blockId;
+        /** Waiting on the factory or the model epoch rather than one block: replayed on epoch change only. */
+        static final int NO_BLOCK = -1;
         ModelNotReady(int blockId, boolean ignored) {
             super("Model is not published for block " + blockId);
             this.blockId = blockId;
@@ -47,12 +49,12 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
             }
             @Override public long getModelMetadataFromClientId(int modelId) {
                 var factory = provider.factory();
-                if (factory == null) throw new ModelNotReady(0, true);
+                if (factory == null) throw new ModelNotReady(ModelNotReady.NO_BLOCK, true);
                 return factory.modelMetadata(modelId);
             }
             @Override public int getFluidClientStateId(int modelId) {
                 var factory = provider.factory();
-                if (factory == null) throw new ModelNotReady(0, true);
+                if (factory == null) throw new ModelNotReady(ModelNotReady.NO_BLOCK, true);
                 int id = factory.fluidModelId(modelId);
                 if (id < 0) throw new IllegalStateException("Published model lacks fluid model: " + modelId);
                 return id;
@@ -95,11 +97,15 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
         }
         try {
             BuiltSection result = core.generateMesh(new SectionMesherCore.Input(position, voxels, children));
-            if (startedEpoch != modelEpoch.getAsLong()) throw new ModelNotReady(0, true);
+            if (startedEpoch != modelEpoch.getAsLong()) throw new ModelNotReady(ModelNotReady.NO_BLOCK, true);
             waiting.remove(position);
             return result;
         } catch (ModelNotReady missing) {
-            waiting.put(position, missing.blockId);
+            if (missing.blockId == ModelNotReady.NO_BLOCK) {
+                waiting.remove(position);//Replayed by the epoch check in retryReady, not by a block publication
+            } else {
+                waiting.put(position, missing.blockId);
+            }
             throw missing;
         }
     }
@@ -117,5 +123,15 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
                 // Retain the dependency until a subsequent bakery publication.
             }
         });
+    }
+
+    /** Sections whose mesh waits for a bakery publication (block-keyed dependency). */
+    public int waitingCount() {
+        return waiting.size();
+    }
+
+    /** Distinct positions ever submitted for meshing; meshed results above this count are remeshes. */
+    public int distinctRequestedCount() {
+        return requested.size();
     }
 }

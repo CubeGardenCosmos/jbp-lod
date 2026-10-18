@@ -15,6 +15,7 @@ import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryUtil.memByteBuffer;
 import static org.lwjgl.util.vma.Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+import static org.lwjgl.util.vma.Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 import static org.lwjgl.util.vma.Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.util.vma.Vma.vmaDestroyBuffer;
@@ -53,6 +54,16 @@ public final class GpuBuffer implements AutoCloseable {
     }
 
     public static GpuBuffer allocate(GameVulkan.Snapshot game, long capacity, int usage, boolean hostWritable) {
+        return create(game, capacity, usage, hostWritable ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT : 0);
+    }
+
+    /** Host-mapped device-to-host readback buffer for dev diagnostics; call {@link #invalidate} before reading. */
+    public static GpuBuffer allocateReadback(GameVulkan.Snapshot game, long capacity) {
+        return create(game, capacity, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+    }
+
+    private static GpuBuffer create(GameVulkan.Snapshot game, long capacity, int usage, int hostAccess) {
+        boolean hostWritable = hostAccess != 0;
         if (capacity <= 0) {
             throw new IllegalArgumentException("GPU buffer capacity must be positive");
         }
@@ -74,7 +85,7 @@ public final class GpuBuffer implements AutoCloseable {
             VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
                     .usage(VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
             if (hostWritable) {
-                allocationInfo.flags(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                allocationInfo.flags(hostAccess);
             }
             LongBuffer pBuffer = stack.mallocLong(1);
             PointerBuffer pAllocation = stack.mallocPointer(1);

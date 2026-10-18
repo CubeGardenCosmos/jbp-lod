@@ -68,6 +68,12 @@ public final class LodNodeService implements AutoCloseable {
     private volatile Throwable failure;
     private volatile boolean running = true;
     private final Thread thread;
+    /** Counts refreshed by the worker after each batch so other threads can read them without touching the tree. */
+    private volatile int snapshotNodes;
+    private volatile int snapshotGeometrySections;
+    private volatile long snapshotGeometryUsedBytes;
+    private volatile long snapshotGeometryCapacityBytes;
+    private volatile int snapshotRequests;
 
     public LodNodeService(int maxNodeCount, int maxSectionCount, long geometryCapacityBytes,
                           MeshRequests meshRequests) {
@@ -204,6 +210,38 @@ public final class LodNodeService implements AutoCloseable {
         return this.failure;
     }
 
+    /** Node count as of the worker's last batch; safe to read from any thread. */
+    public int nodeCountSnapshot() {
+        return this.snapshotNodes;
+    }
+
+    /** Geometry (metadata) slots as of the worker's last batch; safe to read from any thread. */
+    public int geometrySectionCountSnapshot() {
+        return this.snapshotGeometrySections;
+    }
+
+    /** Active node requests as of the worker's last batch; safe to read from any thread. */
+    public int requestCountSnapshot() {
+        return this.snapshotRequests;
+    }
+
+    /** Geometry heap bytes in use as of the worker's last batch; safe to read from any thread. */
+    public long geometryUsedBytesSnapshot() {
+        return this.snapshotGeometryUsedBytes;
+    }
+
+    /** Geometry heap capacity as of the worker's last batch; safe to read from any thread. */
+    public long geometryCapacityBytesSnapshot() {
+        return this.snapshotGeometryCapacityBytes;
+    }
+
+    /** Live depths of the worker's input queues (diagnostics only; the queues are concurrent). */
+    public String queueDepthsSnapshot() {
+        return "topLevelOps=" + this.topLevelOps.size() + " childChanges=" + this.childChanges.size()
+                + " geometryResults=" + this.geometryResults.size() + " requestBatches=" + this.requestBatches.size()
+                + " requestFailures=" + this.requestFailures.size();
+    }
+
     //==================================================================================================================
 
     private void runLoop() {
@@ -292,6 +330,11 @@ public final class LodNodeService implements AutoCloseable {
         if (this.workCounter.addAndGet(-workDone) < 0) {
             this.workCounter.set(0);
         }
+        this.snapshotNodes = this.manager.getNodeCount();
+        this.snapshotGeometrySections = this.geometry.getSectionCount();
+        this.snapshotGeometryUsedBytes = this.geometry.getGeometryUsedBytes();
+        this.snapshotGeometryCapacityBytes = this.geometry.getGeometryCapacityBytes();
+        this.snapshotRequests = this.manager.getActiveRequestCount();
         if (workDone == 0) {
             return 0;
         }

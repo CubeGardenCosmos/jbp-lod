@@ -30,7 +30,7 @@ final class LodColorTarget implements AutoCloseable {
             VkImageCreateInfo info = VkImageCreateInfo.calloc(stack).sType$Default()
                     .imageType(VK_IMAGE_TYPE_2D).format(format).mipLevels(1).arrayLayers(1)
                     .samples(VK_SAMPLE_COUNT_1_BIT).tiling(VK_IMAGE_TILING_OPTIMAL)
-                    .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                    .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
                     .sharingMode(VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
             info.extent().set(width, height, 1);
             LongBuffer result = stack.mallocLong(1);
@@ -51,6 +51,7 @@ final class LodColorTarget implements AutoCloseable {
         view = createdView;
     }
 
+    long image() { return image; }
     long view() { return view; }
 
     void prepare(VkCommandBuffer commandBuffer) {

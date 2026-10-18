@@ -38,9 +38,14 @@ public final class StoredSectionMeshProvider implements LodNodeService.MeshReque
     private final LongOpenHashSet waitingForMesher = new LongOpenHashSet();
     private final MeshRetryPolicy retries = new MeshRetryPolicy();
 
-    public StoredSectionMeshProvider(LodStorageService storage, Executor meshExecutor) {
+    /** Receives the quad count of every submitted mesh result (0 for empty sections). */
+    private final java.util.function.IntConsumer onMeshed;
+
+    public StoredSectionMeshProvider(LodStorageService storage, Executor meshExecutor,
+                                     java.util.function.IntConsumer onMeshed) {
         this.storage = storage;
         this.meshExecutor = meshExecutor;
+        this.onMeshed = onMeshed;
     }
 
     /** Binds the node service that receives results (it needs this provider for construction). */
@@ -74,6 +79,11 @@ public final class StoredSectionMeshProvider implements LodNodeService.MeshReque
         synchronized (waitingForMesher) {
             return waitingForMesher.size();
         }
+    }
+
+    /** Positions with a mesh request in flight (diagnostics). */
+    public int inFlightCount() {
+        return inFlight.size();
     }
 
     public void close() {
@@ -141,6 +151,7 @@ public final class StoredSectionMeshProvider implements LodNodeService.MeshReque
                     LOGGER.info("[JBP-LOD] First section meshed: {} with {} quads.",
                             SectionPos.pretty(position), built.quadCount());
                 }
+                onMeshed.accept(built.quadCount());
                 target.submitGeometryResult(built);
             }
             finish(position, null);

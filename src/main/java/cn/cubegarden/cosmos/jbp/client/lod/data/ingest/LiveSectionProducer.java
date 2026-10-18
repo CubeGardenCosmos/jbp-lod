@@ -10,6 +10,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.LoggerFactory;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,6 +37,7 @@ public final class LiveSectionProducer {
      * @return number of non-empty sections rejected by the backlog bound (0 when every section was admitted)
      */
     public synchronized int capture(LevelChunk chunk) {
+        session.stats().chunkCaptured();
         var light = chunk.getLevel().getLightEngine();
         int sectionY = chunk.getMinSectionY();
         int accepted = 0, rejected = 0;
@@ -70,6 +72,7 @@ public final class LiveSectionProducer {
                             words[i] = mapper.getBaseId((byte) illumination, states[i], biomes[(vx >> 2) | (vz >> 2) << 2 | (vy >> 2) << 4]);
                         }
                         writeHierarchy(x, y, z, words);
+                        session.stats().sectionIngested();
                     } catch (RuntimeException failure) {
                         LOGGER.warn("[JBP-LOD] Section ingest failed", failure);
                     } finally {
@@ -96,16 +99,20 @@ public final class LiveSectionProducer {
             long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
             byte[] stored = session.storage().getSectionData(key).join();
             long[] target = stored == null ? new long[StoredVoxelSection.VOXELS] : StoredVoxelSection.decode(stored);
+            long[] before = stored == null ? null : target.clone();
             VoxelHierarchy.insert(target, source, level, sectionX, sectionY, sectionZ);
-            session.storage().setSectionData(key, StoredVoxelSection.encode(target)).join();
-            byte children = VoxelHierarchy.children(target);
-            if (level == 0 && children != 0) children = (byte) 0xFF;
-            session.nodes().onSectionUpdated(key, SectionPos.DEFAULT_UPDATE_FLAGS, children);
-            int sx = x >> 1, sy = y >> 1, sz = z >> 1;
-            for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
-                long adjacent = SectionPos.pack(level, sx + (axis == 0 ? sign : 0),
-                        sy + (axis == 1 ? sign : 0), sz + (axis == 2 ? sign : 0));
-                session.nodes().onSectionUpdated(adjacent, SectionPos.UPDATE_TYPE_BLOCK_BIT, (byte) 0);
+            //Unchanged levels skip the write and every notification: no watched node can see different voxels.
+            if (before == null || !Arrays.equals(before, target)) {
+                session.storage().setSectionData(key, StoredVoxelSection.encode(target)).join();
+                byte children = VoxelHierarchy.children(target);
+                if (level == 0 && children != 0) children = (byte) 0xFF;
+                session.nodes().onSectionUpdated(key, SectionPos.DEFAULT_UPDATE_FLAGS, children);
+                int sx = x >> 1, sy = y >> 1, sz = z >> 1;
+                for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
+                    long adjacent = SectionPos.pack(level, sx + (axis == 0 ? sign : 0),
+                            sy + (axis == 1 ? sign : 0), sz + (axis == 2 ? sign : 0));
+                    session.nodes().onSectionUpdated(adjacent, SectionPos.UPDATE_TYPE_BLOCK_BIT, (byte) 0);
+                }
             }
             if (level < SectionPos.MAX_LOD_LAYER)
                 source = VoxelHierarchy.downsample(source, 16 >> level, session.mapper()::getBlockStateOpacity);

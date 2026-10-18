@@ -83,6 +83,7 @@ public final class VulkanLodRenderer {
     private boolean gpuReverseZ;
     private long[] failedGenerations;
     private long preparedFrame = Long.MIN_VALUE;
+    private final LodReadbackProbe readbackProbe = new LodReadbackProbe();
 
     private VulkanLodRenderer() {
     }
@@ -215,7 +216,7 @@ public final class VulkanLodRenderer {
                     return null;
                 }
                 res.consumeRetiredSlot(runtime, slot);
-                res.writeDrawDescriptors(slot, runtime.nodeBuffers(), modelResources, targets, gameDepth);
+                res.writeDrawDescriptors(slot, runtime.nodeBuffers(), modelResources, targets);
 
                 float[] mvp = LodFrameMath.multiply(targets.matrices().projection(), targets.matrices().modelView());
                 LodImageViews.Owned gameDepthView = LodImageViews.borrowDepthView(game.device(), depth.image(),
@@ -268,6 +269,9 @@ public final class VulkanLodRenderer {
                 res.markSlotSubmitted(slot.slotIndex(), runCleaner);
                 runtime.afterSubmit(slot);
                 res.hiz.retireReplaced(slot::retireAfterUse);
+                if (readbackProbe.tick()) {
+                    readbackProbe.capture(game, res.offscreen, slot, frameNumber);
+                }
             } catch (RuntimeException | Error failure) {
                 abandonSlot(slot);
                 if (!modelsHandedOff) {
@@ -527,7 +531,13 @@ public final class VulkanLodRenderer {
                     vertexDefines.put("USE_SHADER_INT64", "1");
                 }
                 ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/quads3.vert", Map.copyOf(vertexDefines));
-                ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.of("BLOCK_MODEL_TEXTURE_BINDING", "2"));
+                Map<String, String> fragmentDefines = new HashMap<>();
+                fragmentDefines.put("BLOCK_MODEL_TEXTURE_BINDING", "2");
+                // Opt-in diagnostic (-Djbp.lod.debugSolid=true): solid magenta fragments separate geometry from shading.
+                if (Boolean.getBoolean("jbp.lod.debugSolid")) {
+                    fragmentDefines.put("DEBUG_SOLID", "1");
+                }
+                ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.copyOf(fragmentDefines));
                 VulkanLodPipeline draw = track(created, VulkanLodPipeline.create(game, vertex, fragment,
                         VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
                                 key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
@@ -538,8 +548,10 @@ public final class VulkanLodRenderer {
                                 VulkanLodPipeline.BlendMode.OPAQUE), frameSlots));
                 ShaderCompiler.CompiledShader translucentVertex = compiler.compile("lod/gl46/quads3.vert",
                         Map.copyOf(vertexDefines));
+                Map<String, String> translucentDefines = new HashMap<>(fragmentDefines);
+                translucentDefines.put("TRANSLUCENT", "1");
                 ShaderCompiler.CompiledShader translucentFragment = compiler.compile("lod/gl46/quads.frag",
-                        Map.of("BLOCK_MODEL_TEXTURE_BINDING", "2", "TRANSLUCENT", "1"));
+                        Map.copyOf(translucentDefines));
                 VulkanLodPipeline translucent = track(created, VulkanLodPipeline.create(game,
                         translucentVertex, translucentFragment,
                         VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
@@ -608,15 +620,15 @@ public final class VulkanLodRenderer {
 
         /** Writes every reflected set-0 binding of the draw pipeline for this slot. */
         void writeDrawDescriptors(LodFrameBuffers slot, LodNodeGpuBuffers nodes, ModelResources models,
-                                  LodFrameTargets targets, LodDepthConversion gameDepth) {
-            writeDrawDescriptors(drawPipeline, slot, nodes, models, targets, gameDepth);
-            writeDrawDescriptors(translucentPipeline, slot, nodes, models, targets, gameDepth);
-            writeDrawDescriptors(temporalPipeline, slot, nodes, models, targets, gameDepth);
+                                  LodFrameTargets targets) {
+            writeDrawDescriptors(drawPipeline, slot, nodes, models, targets);
+            writeDrawDescriptors(translucentPipeline, slot, nodes, models, targets);
+            writeDrawDescriptors(temporalPipeline, slot, nodes, models, targets);
         }
 
         private void writeDrawDescriptors(VulkanLodPipeline drawPipeline, LodFrameBuffers slot,
                                           LodNodeGpuBuffers nodes, ModelResources models,
-                                          LodFrameTargets targets, LodDepthConversion gameDepth) {
+                                          LodFrameTargets targets) {
             int index = slot.slotIndex();
             Set<Integer> written = new HashSet<>();
             GpuBuffer scene = slot.sceneUniform();
@@ -639,7 +651,7 @@ public final class VulkanLodRenderer {
                 written.add(LIGHTMAP_BINDING);
             }
             GpuBuffer fogBuffer = fog[index];
-            LodFogUniform.write(fogBuffer.mappedBytes(), 0, targets.matrices().modelView(), targets.fog(), gameDepth);
+            LodFogUniform.write(fogBuffer.mappedBytes(), 0, targets.matrices().modelView(), targets.fog());
             fogBuffer.flush(0, LodFogUniform.BYTE_SIZE);
             bindBuffer(drawPipeline, index, FOG_BINDING, fogBuffer.handle(), LodFogUniform.BYTE_SIZE, written);
             Set<Integer> missing = drawPipeline.bindingNumbers();

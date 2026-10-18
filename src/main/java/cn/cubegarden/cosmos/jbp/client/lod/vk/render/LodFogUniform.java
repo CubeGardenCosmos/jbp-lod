@@ -5,19 +5,17 @@ import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** std140 {@code LodFogBlock} at set 0 / binding 8 of the LOD draw shaders (112 bytes). */
+/** std140 {@code LodFogBlock} at set 0 / binding 8 of the LOD draw shaders (96 bytes). */
 public final class LodFogUniform {
-    public static final int BYTE_SIZE = 112;
+    public static final int BYTE_SIZE = 96;
     public static final int MODEL_VIEW_OFFSET = 0;
     public static final int FOG_COLOR_OFFSET = 64;
     public static final int FOG_RANGE_OFFSET = 80;
-    public static final int DEPTH_PARAMS_OFFSET = 96;
 
     private LodFogUniform() {
     }
 
-    public static void write(ByteBuffer target, int byteOffset, float[] modelView,
-                             LodFrameTargets.Fog fog, LodDepthConversion gameDepth) {
+    public static void write(ByteBuffer target, int byteOffset, float[] modelView, LodFrameTargets.Fog fog) {
         if (modelView.length != 16) {
             throw new IllegalArgumentException("modelView must contain 16 column-major floats");
         }
@@ -36,6 +34,5 @@ public final class LodFogUniform {
         bytes.putFloat(byteOffset + FOG_RANGE_OFFSET + 4, fog.end());
         bytes.putFloat(byteOffset + FOG_RANGE_OFFSET + 8, 0.0f);
         bytes.putFloat(byteOffset + FOG_RANGE_OFFSET + 12, 0.0f);
-        gameDepth.writeVec4(bytes, byteOffset + DEPTH_PARAMS_OFFSET);
     }
 }

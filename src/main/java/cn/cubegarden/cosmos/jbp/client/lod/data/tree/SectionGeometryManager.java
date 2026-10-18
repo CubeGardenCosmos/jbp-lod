@@ -67,7 +67,14 @@ public final class SectionGeometryManager implements GeometryManager {
             throw new IllegalStateException();
         }
 
-        Meta newMeta = this.createMeta(section);
+        Meta newMeta;
+        try {
+            newMeta = this.createMeta(section);
+        } catch (RuntimeException e) {
+            //Geometry OOM after the id was claimed: release the slot so it is not leaked.
+            this.allocationSet.free(newId);
+            throw e;
+        }
         if (newId == this.sectionMetadata.size()) {
             this.sectionMetadata.add(newMeta);
         } else if (this.sectionMetadata.set(newId, newMeta) != null) {

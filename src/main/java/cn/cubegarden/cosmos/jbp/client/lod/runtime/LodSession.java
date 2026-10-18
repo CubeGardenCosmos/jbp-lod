@@ -18,6 +18,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import cn.cubegarden.cosmos.jbp.client.lod.model.ModelFactory;
 
 /**
  * Scope-bound CPU side of JBP-LOD: the asynchronous storage service, the node tree worker and the stored
@@ -25,6 +28,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * session releases the scope, so {@link #closeAsync()} is the last step of teardown.
  */
 public final class LodSession {
+    /** Periodic-log counters; mesh results and ingest feed them from their own threads. */
+    private final LodStats stats = new LodStats();
+    private final ScheduledExecutorService statsLogger = Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "JBP-LOD stats"); thread.setDaemon(true); return thread;
+    });
     /** Upstream node capacity ({@code 1 << 21}); a power of two, below the 2^24 id space. */
     public static final int NODE_CAPACITY = 1 << 21;
     /** Section slots; bounded by the shared frame-buffer contract ({@code maxSections <= 200000}). */
@@ -92,7 +100,7 @@ public final class LodSession {
             thread.setDaemon(true);
             return thread;
         });
-        this.sections = new StoredSectionMeshProvider(storage, meshExecutor);
+        this.sections = new StoredSectionMeshProvider(storage, meshExecutor, stats::sectionMeshed);
         try {
             this.nodes = new LodNodeService(NODE_CAPACITY, SECTION_CAPACITY, GEOMETRY_CAPACITY_BYTES, sections);
         } catch (RuntimeException | Error failure) {
@@ -105,6 +113,27 @@ public final class LodSession {
         this.distanceTracker = new RenderDistanceTracker(TOP_LEVEL_OPERATIONS_PER_FRAME, minSec, maxSec,
                 nodes::insertTopLevelNode, nodes::removeTopLevelNode);
         this.distanceTracker.setRenderDistance(renderDistanceSections + 1);//the +1 covers the outer ring
+        this.statsLogger.scheduleAtFixedRate(this::logStats, 10, 10, TimeUnit.SECONDS);
+    }
+
+    /** Refreshes the snapshot fields from their owners and emits one {@code [JBP-LOD] stats:} line. */
+    private void logStats() {
+        try {
+            stats.nodeSnapshot(nodes.nodeCountSnapshot(), nodes.geometrySectionCountSnapshot(),
+                    nodes.requestCountSnapshot());
+            stats.meshSnapshot(mesher.distinctRequestedCount(), mesher.waitingCount(), sections.inFlightCount());
+            stats.geometrySnapshot(nodes.geometryUsedBytesSnapshot(), nodes.geometryCapacityBytesSnapshot(),
+                    SECTION_CAPACITY);
+            stats.queueSnapshot(nodes.queueDepthsSnapshot());
+            ModelFactory factory = models.factory();
+            if (factory != null) {
+                stats.modelSnapshot(factory.bakedCount(), factory.inflightCount());
+            }
+            LOGGER.info("[JBP-LOD] stats: {}", stats.format());
+        } catch (RuntimeException failure) {
+            //A throw would cancel every later scheduled run, so report and keep the schedule alive
+            LOGGER.warn("[JBP-LOD] stats log failed", failure);
+        }
     }
 
     private static long geometryCapacity() {
@@ -152,6 +181,11 @@ public final class LodSession {
         return models;
     }
 
+    /** Counters behind the periodic {@code [JBP-LOD] stats:} log. */
+    public LodStats stats() {
+        return stats;
+    }
+
     /** Stored-section source with the upstream CPU mesher installed. */
     public StoredSectionMeshProvider sections() {
         return sections;
@@ -185,6 +219,7 @@ public final class LodSession {
         sections.close();
         nodes.close();
         meshExecutor.shutdownNow();
+        statsLogger.shutdownNow();
         storage.closeNow();
     }
 
@@ -205,6 +240,7 @@ public final class LodSession {
         closing = true;
         sections.close();
         meshExecutor.shutdownNow();
+        statsLogger.shutdownNow();
         closingFuture = ingestDrain.handle((unused, failure) -> null).thenCompose(unused -> {
             nodes.close();
             return storage.closeAsync();

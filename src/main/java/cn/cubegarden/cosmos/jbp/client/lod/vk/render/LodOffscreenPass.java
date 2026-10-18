@@ -75,6 +75,7 @@ final class LodOffscreenPass implements AutoCloseable {
     int height() { return height; }
     int colorFormat() { return colorFormat; }
     long colorView(int slot) { return colors[slot].view(); }
+    long colorImage(int slot) { return colors[slot].image(); }
     long depthView(int slot) { return depths[slot].view(); }
     LodDepthTarget depthTarget(int slot) { return depths[slot]; }
 

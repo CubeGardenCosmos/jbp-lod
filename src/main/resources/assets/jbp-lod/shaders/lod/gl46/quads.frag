@@ -3,7 +3,6 @@
 layout(location=0) flat in uvec4 interData;
 layout(location=1) in vec2 uv;
 layout(location=2) in float fogDistance;
-layout(location=3) in float lodW;
 
 
 #ifndef PATCHED_SHADER
@@ -86,15 +85,8 @@ vec4 applyLodFog(vec4 sourceColour) {
     return sourceColour;
 }
 
-// Sodium-equivalent depth of this fragment (see fog.glsl depthParams); the LOD projection has a
-// different near/far pair, so its own depth cannot be compared with the game depth buffer.
-float gameDepthFromLodW() {
-    float ndc = FogUniform.depthParams.x + FogUniform.depthParams.y / lodW;
-    return clamp(FogUniform.depthParams.z > 0.5 ? ndc : ndc * 0.5 + 0.5, 0.0, 1.0);
-}
 
 void main() {
-    gl_FragDepth = gameDepthFromLodW();
     vec2 tile;
     vec2 uv2 = modf(uv, tile)*(1.0/(vec2(3.0,2.0)*256.0));
     vec4 colour;
@@ -135,8 +127,12 @@ void main() {
     #endif
 
     #ifndef PATCHED_SHADER
+    #ifdef DEBUG_SOLID
+    outColour = vec4(1.0, 0.0, 1.0, 1.0);
+    #else
     colour = computeColour(texPos, colour);
     outColour = applyLodFog(colour);
+    #endif
     #else
     uint modelId = getModelId();
     BlockModel model = modelData[modelId];

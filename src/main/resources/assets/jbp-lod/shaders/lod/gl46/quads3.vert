@@ -18,7 +18,6 @@
 layout(location=0) flat out uvec4 interData;
 layout(location=1) out vec2 uv;
 layout(location=2) out float fogDistance;
-layout(location=3) out float lodW;
 
 
 #ifdef TAA_PATCH
@@ -40,7 +39,6 @@ void main() {
 
     gl_Position = getQuadCornerPos(quad, cornerId);
     uv = getCornerUV(quad, cornerId);
-    lodW = gl_Position.w;
     vec2 cornerMask = vec2((cornerId >> 1) & 1u, cornerId & 1u) * quad.lodScale;
     vec3 cornerPoint = quad.basePoint
             + swizzelDataAxis(quad.axis, vec3(quad.quadSizeAddin * cornerMask, 0.0));
