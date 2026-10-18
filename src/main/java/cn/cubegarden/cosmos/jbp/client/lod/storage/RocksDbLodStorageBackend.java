@@ -158,6 +158,7 @@ public final class RocksDbLodStorageBackend implements LodStorageBackend {
                 consumer.accept(key);
                 iterator.next();
             }
+            iterator.status();
         } catch (RocksDBException failure) {
             throw storageFailure("iterate section positions", failure);
         }
@@ -186,6 +187,7 @@ public final class RocksDbLodStorageBackend implements LodStorageBackend {
                 result.put(bytesToInt(iterator.key()), iterator.value());
                 iterator.next();
             }
+            iterator.status();
         } catch (RocksDBException failure) {
             throw storageFailure("read ID mappings", failure);
         }

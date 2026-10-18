@@ -155,6 +155,23 @@ vec2 getCornerUV(const in QuadData quad, uint cornerId) {
 }
 
 #ifndef PATCHED_SHADER
+// Vanilla cardinal lighting unless the renderer supplies dimension-specific values.
+#ifndef Z_AXIS_FACE_TINT
+#define Z_AXIS_FACE_TINT 0.8
+#endif
+#ifndef X_AXIS_FACE_TINT
+#define X_AXIS_FACE_TINT 0.6
+#endif
+#ifndef UP_FACE_TINT
+#define UP_FACE_TINT 1.0
+#endif
+#ifndef DOWN_FACE_TINT
+#define DOWN_FACE_TINT 0.5
+#endif
+#ifndef NO_SHADE_FACE_TINT
+#define NO_SHADE_FACE_TINT 1.0
+#endif
+
 float computeDirectionalFaceTint(bool isShaded, uint face) {
     //Apply face tint
     if (isShaded) {

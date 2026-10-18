@@ -50,9 +50,9 @@ class ShaderCompilerCoverageTest {
                     shaderCase.path() + " must use explicit Vulkan set-0 descriptor bindings");
             if (shaderCase.path().endsWith("/quads3.vert") || shaderCase.path().endsWith("/quads.frag")) {
                 assertTrue(shader.reflection().descriptors().stream()
-                                .anyMatch(descriptor -> descriptor.name().equals("FogUniform")
+                                .anyMatch(descriptor -> descriptor.name().equals("LodFogBlock")
                                         && descriptor.binding() == 8),
-                        shaderCase.path() + " must reflect the FogUniform descriptor at binding 8");
+                        shaderCase.path() + " must reflect the LodFogBlock descriptor at binding 8");
             }
 
             compiled.add(shader);

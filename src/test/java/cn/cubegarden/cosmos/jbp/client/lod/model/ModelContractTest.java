@@ -85,7 +85,8 @@ class ModelContractTest {
         assertEquals(0, encoded.data().padding0());
         assertEquals(0, encoded.data().padding6());
         assertEquals(-1, encoded.data().face1());
-        assertEquals(0b1001, (int) ((encoded.metadata() >>> 48) & 0xff));
+        // Global flags occupy bits 48–54; light emission begins at bit 55, within the same byte.
+        assertEquals(0b1001, (int) ((encoded.metadata() >>> 48) & 0x7f));
         assertEquals(11, (encoded.metadata() >>> 55) & 0xf);
         assertEquals(0b01, encoded.data().face2() >>> 24 & 0b11); // partial tint
         assertThrows(IllegalArgumentException.class, () -> ModelRecordEncoder.encode(

@@ -1,20 +1,195 @@
-JBP-LOD source record
+JBP-LOD source and derivation record
 
-V0 is an independent implementation of the scope, node-path, and exclusive-lock contracts documented in docs/todo/jbp-lod.md and mods/docs/voxy-vulkan-core-design.md. No upstream Voxy source files or implementation blocks were copied into this project. The sealed mods/voxy tree and MCRcortex/voxy were consulted only as read-only behavioral references.
+Upstream: MCRcortex/voxy, https://github.com/MCRcortex/voxy, branch 263.
+Sealed baseline: 247adf2625324782e13a3fa8b646c0f95e68031b (mods/voxy).
+The sealed tree remains read-only. This notice covers the V2–V4 shader,
+layout, storage, tree, compute, model and rendering derivations; it does not
+claim that the later project is wholly independent of upstream code.
+V0 scope/path/exclusive-lock code was independently implemented with upstream
+consulted as a behavioral reference; that statement does not apply to direct
+ports added in V2–V4.
 
-V2 Vulkan shader ports in `src/main/resources/assets/jbp-lod/shaders/` derive their algorithms from MCRcortex/voxy 263:
-- `lod/{block_model.glsl,frustum.glsl,lighting.glsl,pos_util.glsl,quad_format.glsl,quad_util.glsl,section.glsl}`
-- `lod/hierarchical/{node.glsl,queue.glsl,screenspace.glsl,traversal_dev.comp,cleaner/batch_visibility_set.comp,cleaner/result_transformer.comp,cleaner/sort_visibility.comp}`
-- `lod/gl46/{bindings.glsl,prep.comp,cmdgen.comp,buildtranslucents.comp,quads3.vert,quads.frag,cull/raster.vert,cull/raster.frag}`
-- `hiz/hiz.comp`, `hiz/blit.vert` from upstream `hiz/blit.vsh`, and `hiz/blit.frag` from upstream `hiz/blit.fsh`
-- `util/{depthutils.glsl,memcpy.comp,scatter.comp,prefixsum/inital3.comp,prefixsum/simple.comp}`
+Upstream LICENSE.md states:
 
-Ports replace GL binding/location assumptions with Vulkan descriptor sets, push constants, and Vulkan built-ins. `hiz.comp` retains the clustered subgroup fast path and adds a shared-memory fallback; `lod/gl46/fog.glsl` is a JBP-LOD Vulkan-specific addition. Upstream Voxy headers were absent from these shader resources; each port carries a source-path comment, and this record identifies the corresponding upstream paths.
+Copyright 2025 MCRcortex
+All rights reserved.
+Do not redistribute.
 
-The `cn.cubegarden.cosmos.jbp.client.lod.model` implementation derives bakery semantics from sealed upstream paths recorded in `mods/docs/jbp-lod-evidence/V4-model-contract.md`: `ModelFactory.java`, `ModelStore.java`, `ModelQueries.java`, `ModelBakerySubsystem.java`, `ColourDepthTextureData.java`, `IdNotYetComputedException.java`, `TextureUtils.java`, `MipGen.java`, `bakery/SoftwareModelTextureBakery.java`, `bakery/ReuseVertexConsumer.java`, `bakery/SoftwareRasterizer.java`, `block_model.glsl`, and `lod/gl46/quads.frag`. The port replaces the upstream GL/software raster and upload path with a Vulkan baker on the borrowed game device. The referenced upstream files have no file-level license/header block to copy. `mods/voxy` remains sealed and read-only.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
-The Vulkan indexed-indirect raster pipeline and shared UINT16 quad-index pattern in `vk/render/VulkanLodPipeline.java` and `vk/render/LodIndexBuffer.java` derive their rendering semantics and index ordering from sealed MCRcortex/voxy 263 `section/backend/mdic/MDICSectionRenderer.java` and `rendering/util/SharedIndexBuffer.java`. These are Vulkan implementations and do not copy or invoke the sealed OpenGL renderer; the upstream All Rights Reserved license continues to apply to derived material.
+This record grants no rights to redistribute upstream or derived material.
+The source mappings below record implementation/algorithm and ABI derivation,
+not just linked dependencies. Existing upstream attribution must be retained.
 
-The V3 CPU/GPU data-layout and reference implementations in `cn.cubegarden.cosmos.jbp.client.lod.data` and `compute/SectionPreparationReference.java` / `compute/PrefixSumReference.java` derive the described byte/bit layouts and pass semantics from sealed MCRcortex/voxy 263 paths `assets/voxy/shaders/lod/section.glsl`, `quad_format.glsl`, `gl46/bindings.glsl`, `gl46/prep.comp`, `gl46/cmdgen.comp`, `gl46/buildtranslucents.comp`, `util/prefixsum/simple.comp`, and `client/core/rendering/section/backend/mdic/MDICSectionRenderer.java` / `client/core/rendering/util/SharedIndexBuffer.java`. The V3 RocksDB adapter derives backend semantics from `common/config/storage/StorageBackend.java`, `RocksDBStorageBackend.java`, `IMappingStorage.java`, and `IStoredSectionPositionIterator.java`. These are independently written Vulkan/Java implementations; sealed source remains read-only. Android RocksDB compatibility is not asserted; see `mods/docs/jbp-lod-evidence/V3-storage-decision.md`.
+Path notation
+-------------
+Local Java paths below are relative to
+src/main/java/cn/cubegarden/cosmos/jbp/client/lod/.
+Upstream Java paths are relative to
+mods/voxy/src/main/java/me/cortex/voxy/.
+Shader paths are relative to src/main/resources/assets/jbp-lod/shaders/ locally
+and mods/voxy/src/main/resources/assets/voxy/shaders/ upstream.
+Braces enumerate every named file, not an entire package.
 
-The upstream repository's license is All Rights Reserved; this record does not grant rights to redistribute upstream material.
+V2 shader ports (also used/modified by V3–V4)
+------------------------------------------
+Each of the following local files derives from the identical upstream shader
+path, except the explicit blit extension mappings:
+- lod/{block_model.glsl,frustum.glsl,lighting.glsl,pos_util.glsl,quad_format.glsl,quad_util.glsl,section.glsl}
+- lod/hierarchical/{node.glsl,queue.glsl,screenspace.glsl,traversal_dev.comp}
+- lod/hierarchical/cleaner/{batch_visibility_set.comp,result_transformer.comp,sort_visibility.comp}
+- lod/gl46/{bindings.glsl,prep.comp,cmdgen.comp,buildtranslucents.comp,quads3.vert,quads.frag}
+- lod/gl46/cull/{raster.vert,raster.frag}
+- hiz/hiz.comp
+- hiz/blit.vert <- hiz/blit.vsh
+- hiz/blit.frag <- hiz/blit.fsh
+- util/{depthutils.glsl,memcpy.comp,scatter.comp}
+- util/prefixsum/{inital3.comp,simple.comp}
+
+Ports replace GL bindings with Vulkan descriptors, push constants and built-ins.
+HiZ retains the clustered subgroup algorithm with a shared-memory fallback.
+V3 bounds indirect-command writes to their allocated regions. Upstream shader
+resources do not carry file-level license blocks; port headers identify their
+upstream paths. lod/gl46/fog.glsl and lod/depth_convert.{vert,frag} are JBP-LOD
+Vulkan additions, not copies of upstream shaders; the depth conversion replaces
+the role of upstream post/depth_cp.* rather than porting its GL framebuffer copy.
+
+V3 data/layout, storage and reference implementations
+---------------------------------------------------
+- data/{SectionMeta.java,PackedQuad.java,SectionGeometry.java,SectionIngest.java}
+  <- lod/{section.glsl,quad_format.glsl,pos_util.glsl,quad_util.glsl}: section
+  and packed-quad encoding, range ordering and quad-index rebasing.
+- data/{DrawControl.java,DrawIndexedIndirectCommand.java}
+  <- lod/gl46/{bindings.glsl,prep.comp,cmdgen.comp,buildtranslucents.comp} and
+  client/core/rendering/section/backend/mdic/MDICSectionRenderer.java:
+  counter/command regions and indirect-command fields (Vulkan indexed commands).
+- data/{LodSceneUniform.java,TraversalSceneUniform.java}
+  <- lod/gl46/bindings.glsl, lod/hierarchical/traversal_dev.comp and
+  client/core/rendering/{Viewport.java,hierachical/HierarchicalOcclusionTraverser.java}:
+  camera-relative scene/traversal uniform layouts.
+- data/BlockModelData.java and vk/gpu/LodModelBuffers.java
+  <- lod/block_model.glsl and client/core/model/ModelStore.java:
+  64-byte model records and packed colour-word storage.
+- compute/SectionPreparationReference.java <- lod/gl46/prep.comp.
+- compute/PrefixSumReference.java <- util/prefixsum/{simple.comp,inital3.comp}.
+- vk/gpu/{LodFrameBuffers.java,LodSectionGpuBuffers.java}
+  <- the above section, command and traversal layouts and
+  client/core/rendering/section/backend/mdic/MDICSectionRenderer.java:
+  buffer regions, queue seeds, metadata and geometry storage contracts.
+- storage/{LodStorageBackend.java,RocksDbLodStorageBackend.java,LodStorageSession.java}
+  <- common/config/storage/StorageBackend.java,
+  common/config/storage/rocksdb/RocksDBStorageBackend.java and upstream
+  common/config/{IMappingStorage.java,IStoredSectionPositionIterator.java} contracts:
+  section keys, mapping IDs, iteration, column families and lifetime ordering.
+  The JNI adapter does not assert Android RocksDB compatibility; see
+  mods/docs/jbp-lod-evidence/V3-storage-decision.md.
+
+V4 CPU tree, ID mapping and GPU publication
+-----------------------------------------
+The local source-reference headers document direct ports as well as adapted
+implementations. In particular NodeManager is not an independently invented
+state machine. The following mappings retain upstream algorithms/layouts:
+- data/IdMapper.java <- common/world/other/Mapper.java.
+- data/tree/SectionPos.java <- common/world/WorldEngine.java.
+- data/tree/{AllocationArena.java,HierarchicalBitSet.java}
+  <- common/util/{AllocationArena.java,HierarchicalBitSet.java}, respectively.
+- data/tree/{ExpandingObjectAllocationList.java,RingTracker.java}
+  <- client/core/util/{ExpandingObjectAllocationList.java,RingTracker.java}.
+- data/tree/BuiltSection.java <- client/core/rendering/building/BuiltSection.java.
+- data/tree/GeometryManager.java
+  <- client/core/rendering/section/geometry/IGeometryManager.java.
+- data/tree/SectionGeometryManager.java
+  <- client/core/rendering/section/geometry/BasicAsyncGeometryManager.java.
+- data/tree/{NodeManager.java,NodeStore.java,NodeChildRequest.java,SingleNodeRequest.java}
+  <- client/core/rendering/hierachical/ files of the same names.
+- data/tree/{LodNodeService.java,SectionDelta.java}
+  <- client/core/rendering/hierachical/AsyncNodeManager.java (including SyncResults).
+- data/tree/RenderDistanceTracker.java
+  <- client/core/rendering/RenderDistanceTracker.java.
+- data/tree/SectionUpdateRouter.java <- client/core/rendering/SectionUpdateRouter.java.
+- data/tree/SectionWatcher.java <- client/core/rendering/ISectionWatcher.java.
+- vk/gpu/LodNodeGpuBuffers.java
+  <- client/core/rendering/hierachical/{HierarchicalOcclusionTraverser.java,AsyncNodeManager.java}
+  and client/core/rendering/section/geometry/BasicSectionGeometryData.java:
+  absent-node fill, swap-remove root IDs, merged updates and section/quad stores.
+- runtime/{LodRuntime.java,LodSession.java} and storage/StoredSectionMeshProvider.java
+  retain upstream traversal capacities, render-distance and mesh-backlog/request
+  budget semantics used by HierarchicalOcclusionTraverser/AsyncNodeManager;
+  session ownership and asynchronous storage integration are JBP-LOD adaptations.
+
+V4 HiZ, compute and raster integration
+-------------------------------------
+- vk/gpu/{HizLayout.java,HizImage.java,HizBlitPipeline.java,HizPyramid.java}
+  <- client/core/rendering/util/{HiZBuffer2.java,HiZBuffer.java} and the HiZ
+  shaders listed above: R32F allocation, floor-power-of-two extents, depth blit,
+  compute mip chain, small-extent blit schedule and sampling conventions.
+- compute/{LodComputeLayout.java,LodComputeExecutor.java}
+  <- client/core/rendering/hierachical/{HierarchicalOcclusionTraverser.java,NodeCleaner.java},
+  client/core/rendering/section/backend/mdic/MDICSectionRenderer.java and
+  client/core/rendering/Viewport.java: ping-pong traversal, cleaner passes,
+  scene arithmetic and prep/cull/cmdgen/prefix-sum/translucent pass ordering.
+- vk/render/{VulkanLodPipeline.java,VulkanLodRenderer.java,LodCullRasterPass.java}
+  <- client/core/rendering/section/backend/mdic/MDICSectionRenderer.java and
+  lod/gl46 shaders: indexed-indirect ranges, raster state and section-AABB
+  visibility pass semantics, adapted to the borrowed game Vulkan device.
+- vk/render/LodIndexBuffer.java <- client/core/rendering/util/SharedIndexBuffer.java:
+  shared quad winding and AABB cube indices; Vulkan stores cube indices as
+  UINT16 rather than upstream GL_UNSIGNED_BYTE.
+- vk/render/LodFrameMath.java <- client/core/rendering/hierachical/NodeCleaner.java:
+  free-geometry cleaner threshold.
+- vk/render/LodSamplers.java <- client/core/model/ModelStore.java:
+  nearest atlas texels, linear mip interpolation and repeat addressing.
+- vk/render/LodDepthConvertPass.java replaces the role of the upstream depth
+  copy/one-frame-latent HiZ input; its Vulkan projection conversion, resources
+  and barriers are new implementation rather than a GL command translation.
+
+V4 model bakery and atlas
+-------------------------
+Upstream model paths in this section are under client/core/model/.
+- model/{ModelFactory.java,ModelRecordEncoder.java,ModelColourTable.java,ModelTinting.java,ModelIdTable.java,ModelSignature.java}
+  <- ModelFactory.java: model/fluid ordering, face analysis and metadata,
+  tint capture and biome LUT rebasing, dense model IDs and baked-face deduplication.
+  ModelSignature replaces the upstream full-array equality key with a canonical
+  SHA-256 digest; this is an adaptation, not the original equality implementation.
+- model/ColourDepthTextureData.java <- ColourDepthTextureData.java:
+  face colour/depth data and content equality/hash semantics.
+- model/ModelQueries.java <- ModelQueries.java: per-face/global metadata bits.
+- model/TextureUtils.java <- TextureUtils.java: coverage, bounds, depth, tint,
+  mip filtering and linear-space averaging.
+- model/MipGen.java <- MipGen.java: six-face packing, transparent-pixel
+  solidification and mip chain generation.
+- model/{ModelAtlasLayout.java,VulkanModelAtlas.java,ModelResources.java}
+  <- ModelFactory.java, ModelStore.java, MipGen.java and lod/block_model.glsl /
+  lod/gl46/quads.frag: 16-bit IDs, 3x2 face tiles, 256x256 tile grid, four mip
+  levels (0–3), model/colour buffer and atlas sampling contracts.
+- model/ModelGeometryBaker.java <- bakery/SoftwareModelTextureBakery.java:
+  directional/unculled quads, six view transforms, fluid tessellation and ordering.
+- model/BakeVertexConsumer.java <- bakery/ReuseVertexConsumer.java:
+  vertex/meta encoding and quad triangle order.
+- model/VulkanModelBaker.java and shaders/model/{bake.vert,bake.frag}
+  <- bakery/{SoftwareModelTextureBakery.java,SoftwareRasterizer.java}:
+  six-view projection, face winding, opaque/translucent blending, tint/stencil
+  and colour/depth result semantics. Vulkan rasterization/readback replaces the
+  upstream GL/software raster path; the shaders are Vulkan-specific implementations.
+- model/{ModelProvider.java,ModelStateSource.java} and
+  data/BlockStateModelIdResolver.java expose/adapt ModelFactory.java,
+  ModelBakerySubsystem.java and common/world/other/Mapper.java provider and
+  block-state/model-ID domain contracts; upstream IdNotYetComputedException.java
+  is a behavioral reference for the unresolved-ID case, not a copied local file.
+  model/ModelLifecycle.java is project Fabric resource-reload integration.
+- vk/bridge/mixin/{SpriteContentsAccessor.java,StairBlockAccessor.java}
+  replace the upstream access-widener access to SpriteContents.mipmapStrategy
+  and StairBlock.baseState used by the model bakery/tint logic.
+
+Vulkan device ownership, allocation wrappers, retirement/barrier machinery,
+RenderPearl/Sodium bridge hooks and scope/storage-worker plumbing are project
+integration code; using an upstream-format buffer does not imply a copied
+upstream GL resource implementation. Tests of these ports and ABI contracts do
+not establish game/GPU correctness. Game/GPU evidence remains:
+pending: game smoke deferred by user

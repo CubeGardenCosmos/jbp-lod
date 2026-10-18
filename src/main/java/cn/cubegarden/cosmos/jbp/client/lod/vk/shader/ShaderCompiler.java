@@ -191,7 +191,8 @@ public final class ShaderCompiler {
     }
     private static void validateSpirvStructure(String sourceName, ByteBuffer words) {
         int wordCount = words.remaining() / Integer.BYTES;
-        if (wordCount < 5 || words.getInt(4 * Integer.BYTES) == 0) {
+        // Header words: magic, version, generator, ID bound, reserved schema (zero).
+        if (wordCount < 5 || words.getInt(3 * Integer.BYTES) == 0) {
             throw new ShaderCompilationException(sourceName, "SPIR-V header is truncated or has a zero ID bound", null);
         }
         int cursor = 5;

@@ -30,10 +30,11 @@ class TreeSupportTest {
         assertEquals(1, set.allocateNext());
         assertEquals(2, set.getMaxIndex());
         assertEquals(3, set.allocateNextConsecutiveCounted(5));
+        assertEquals(8, set.getCount(), "three existing allocations plus five consecutive allocations");
         assertEquals(7, set.getMaxIndex() - 0);
         set.free(7);
         assertEquals(6, set.getMaxIndex());
-        assertEquals(8, set.getCount());
+        assertEquals(7, set.getCount(), "freeing an allocated index decreases the live allocation count");
         assertTrue(set.isSet(3));
     }
 
