@@ -226,7 +226,7 @@ public final class VulkanLodRenderer {
                     runCleaner = LodFrameMath.shouldRunCleaner(runtime.nodeBuffers().geometryCapacityBytes(),
                             runtime.nodeBuffers().geometryUsedBytes());
                     VkCommandBuffer commandBuffer = slot.beginCommands();
-                    FrameHooks hooks = new FrameHooks(res, runtime, gameDepthView.view(), gameDepth, lodDepth, plan);
+                    FrameHooks hooks = new FrameHooks(res, runtime, gameDepthView.view(), reverseZ, plan);
                     runtime.recordUploads(commandBuffer);
                     slot.clearDrawOutputs(commandBuffer);
                     LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(frameNumber, mvp,
@@ -235,6 +235,9 @@ public final class VulkanLodRenderer {
                             runtime.requestQueueSize(), runtime.nodeInputs(),
                             runtime.nodeBuffers().sectionMetadata(), runtime.takeVisibilityOps(), runCleaner,
                             runtime.cleanerMaxNodeId(), hooks);
+                    res.bounding.record(commandBuffer, slot, mvp, context.cameraX(), context.cameraY(),
+                            context.cameraZ(), Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f,
+                            LodBoundingSectionStore.instance());
                     runtime.executor().recordFrame(commandBuffer, slot, inputs);
                     res.offscreen.begin(commandBuffer, slot.slotIndex(), false);
                     vkCmdBindIndexBuffer(commandBuffer, res.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
@@ -430,25 +433,21 @@ public final class VulkanLodRenderer {
         private final Resources res;
         private final LodRuntime runtime;
         private final long gameDepthView;
-        private final LodDepthConversion gameDepth;
-        private final LodDepthConversion lodDepth;
+        private final boolean reverseZ;
         private final LodDrawPlan plan;
 
-        FrameHooks(Resources res, LodRuntime runtime, long gameDepthView, LodDepthConversion gameDepth,
-                   LodDepthConversion lodDepth, LodDrawPlan plan) {
+        FrameHooks(Resources res, LodRuntime runtime, long gameDepthView, boolean reverseZ, LodDrawPlan plan) {
             this.res = res;
             this.runtime = runtime;
             this.gameDepthView = gameDepthView;
-            this.gameDepth = gameDepth;
-            this.lodDepth = lodDepth;
+            this.reverseZ = reverseZ;
             this.plan = plan;
         }
 
         @Override
         public LodComputeExecutor.HiZInputs beforeTraversal(VkCommandBuffer commandBuffer, LodFrameBuffers slot) {
             LodDepthTarget depthTarget = res.offscreen.depthTarget(slot.slotIndex());
-            res.convertPass.record(commandBuffer, slot.slotIndex(), gameDepthView, gameDepth, lodDepth,
-                    depthTarget);
+            res.convertPass.record(commandBuffer, slot.slotIndex(), gameDepthView, reverseZ, depthTarget);
             res.offscreen.begin(commandBuffer, slot.slotIndex(), true);
             if (LodDrawSequence.drawsPreviousOpaque(res.history.valid)) {
                 res.drawPipeline.bind(commandBuffer, slot.slotIndex(), 0, 0,
@@ -486,6 +485,7 @@ public final class VulkanLodRenderer {
         final HizPyramid hiz;
         final LodDepthConvertPass convertPass;
         final LodCullRasterPass cullPass;
+        final LodBoundingPass bounding;
         final GpuBuffer[] fog;
         final long atlasSampler;
         final long lightmapSampler;
@@ -500,7 +500,7 @@ public final class VulkanLodRenderer {
                           LodIndexBuffer indexBuffer, LodOffscreenPass offscreen, LodOpaqueHistory history,
                           HizPyramid hiz, LodDepthConvertPass convertPass,
                           LodCullRasterPass cullPass, GpuBuffer[] fog, long atlasSampler, long lightmapSampler,
-                          long depthSampler, int frameSlots) {
+                          long depthSampler, LodBoundingPass bounding, int frameSlots) {
             this.game = game;
             this.drawPipeline = drawPipeline;
             this.translucentPipeline = translucentPipeline;
@@ -515,6 +515,7 @@ public final class VulkanLodRenderer {
             this.atlasSampler = atlasSampler;
             this.lightmapSampler = lightmapSampler;
             this.depthSampler = depthSampler;
+            this.bounding = bounding;
             this.requestsPending = new boolean[frameSlots];
             this.cleanerPending = new boolean[frameSlots];
         }
@@ -533,19 +534,31 @@ public final class VulkanLodRenderer {
                 ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/quads3.vert", Map.copyOf(vertexDefines));
                 Map<String, String> fragmentDefines = new HashMap<>();
                 fragmentDefines.put("BLOCK_MODEL_TEXTURE_BINDING", "2");
-                // Opt-in diagnostic (-Djbp.lod.debugSolid=true): solid magenta fragments separate geometry from shading.
+                // Opt-in diagnostics: -Djbp.lod.debugSolid=true paints solid magenta; -Djbp.lod.debugView=<normal|uv|face|model|depth>
+                // replaces the colour with a per-fragment attribute (see LodDebugView). Both are off by default.
                 if (Boolean.getBoolean("jbp.lod.debugSolid")) {
                     fragmentDefines.put("DEBUG_SOLID", "1");
                 }
+                LodDebugView debugView = LodDebugView.parse(System.getProperty(LodDebugView.PROPERTY)).orElseGet(() -> {
+                    LOGGER.warn("[JBP-LOD] Unknown -D{} value '{}'; expected normal|uv|face|model|depth. Debug view disabled.",
+                            LodDebugView.PROPERTY, System.getProperty(LodDebugView.PROPERTY));
+                    return LodDebugView.OFF;
+                });
+                if (debugView != LodDebugView.OFF) {
+                    fragmentDefines.put("LOD_DEBUG_VIEW", String.valueOf(debugView.shaderCode()));
+                    LOGGER.info("[JBP-LOD] Debug view active: {}", debugView);
+                }
                 ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.copyOf(fragmentDefines));
                 VulkanLodPipeline draw = track(created, VulkanLodPipeline.create(game, vertex, fragment,
-                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
+                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.SEED_FORMAT, true, true,
                                 key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
-                                VulkanLodPipeline.BlendMode.OPAQUE), frameSlots));
+                                VulkanLodPipeline.BlendMode.OPAQUE)
+                                .withStencil(VulkanLodPipeline.Stencil.LOD_ON_SKY), frameSlots));
                 VulkanLodPipeline temporal = track(created, VulkanLodPipeline.create(game, vertex, fragment,
-                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
+                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.SEED_FORMAT, true, true,
                                 key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
-                                VulkanLodPipeline.BlendMode.OPAQUE), frameSlots));
+                                VulkanLodPipeline.BlendMode.OPAQUE)
+                                .withStencil(VulkanLodPipeline.Stencil.LOD_ON_SKY), frameSlots));
                 ShaderCompiler.CompiledShader translucentVertex = compiler.compile("lod/gl46/quads3.vert",
                         Map.copyOf(vertexDefines));
                 Map<String, String> translucentDefines = new HashMap<>(fragmentDefines);
@@ -554,9 +567,10 @@ public final class VulkanLodRenderer {
                         Map.copyOf(translucentDefines));
                 VulkanLodPipeline translucent = track(created, VulkanLodPipeline.create(game,
                         translucentVertex, translucentFragment,
-                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
+                        VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.SEED_FORMAT, true, true,
                                 key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
-                                VulkanLodPipeline.BlendMode.ALPHA), frameSlots));
+                                VulkanLodPipeline.BlendMode.ALPHA)
+                                .withStencil(VulkanLodPipeline.Stencil.LOD_ON_SKY), frameSlots));
                 LodIndexBuffer index = track(created, LodIndexBuffer.create(game));
                 LodOpaqueHistory history = track(created, new LodOpaqueHistory(game));
                 HizPyramid hizPyramid = track(created, new HizPyramid(game, compiler, frameSlots,
@@ -568,6 +582,8 @@ public final class VulkanLodRenderer {
                         new LodDepthConvertPass(game, compiler, frameSlots, depthSampler));
                 LodCullRasterPass cull = track(created,
                         new LodCullRasterPass(game, compiler, frameSlots, key.reverseZ(), index.handle()));
+                LodBoundingPass bounding = track(created,
+                        new LodBoundingPass(game, compiler, frameSlots, key.reverseZ(), key.width(), key.height()));
                 GpuBuffer[] fogBuffers = new GpuBuffer[frameSlots];
                 for (int i = 0; i < frameSlots; i++) {
                     fogBuffers[i] = track(created, GpuBuffer.allocate(game, LodFogUniform.BYTE_SIZE,
@@ -578,7 +594,7 @@ public final class VulkanLodRenderer {
                 long lightmapSampler = LodSamplers.lightmap(game.device());
                 created.add(() -> org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), lightmapSampler, null));
                 return new Resources(game, draw, translucent, temporal, index, offscreen, history, hizPyramid, convert, cull, fogBuffers,
-                        atlasSampler, lightmapSampler, depthSampler, frameSlots);
+                        atlasSampler, lightmapSampler, depthSampler, bounding, frameSlots);
             } catch (RuntimeException | Error failure) {
                 // Nothing has been submitted yet, so immediate destruction in reverse order is safe.
                 for (int i = created.size() - 1; i >= 0; i--) {
@@ -636,6 +652,9 @@ public final class VulkanLodRenderer {
             bindBuffer(drawPipeline, index, 1, nodes.geometry().handle(), nodes.geometry().capacity(), written);
             drawPipeline.writeCombinedImageSampler(index, 2, atlasSampler, models.atlasView(), models.atlasLayout());
             written.add(2);
+            drawPipeline.writeCombinedImageSampler(index, 9, depthSampler, bounding.depthView(index),
+                    VK_IMAGE_LAYOUT_GENERAL);
+            written.add(9);
             bindBuffer(drawPipeline, index, 3, models.models().handle(), models.modelBytes(), written);
             bindBuffer(drawPipeline, index, 4, models.colours().handle(), models.colourBytes(), written);
             GpuBuffer positions = drawPipeline == this.drawPipeline ? history.positions : slot.positionScratch();
@@ -682,6 +701,7 @@ public final class VulkanLodRenderer {
                 buffer.close();
             }
             cullPass.close();
+            bounding.close();
             convertPass.close();
             org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), depthSampler, null);
             hiz.close();

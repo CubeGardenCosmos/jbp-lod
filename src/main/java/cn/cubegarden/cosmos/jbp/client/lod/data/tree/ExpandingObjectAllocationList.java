@@ -53,6 +53,16 @@ public final class ExpandingObjectAllocationList<T> {
         return this.objects[index];
     }
 
+    /** Visits every allocated entry with its id; intended for diagnostics on the owning thread. */
+    public void forEachAllocated(java.util.function.ObjIntConsumer<T> action) {
+        int bound = Math.min(this.objects.length, this.bitSet.getLimit());
+        for (int i = 0; i < bound; i++) {
+            if (this.bitSet.isSet(i)) {
+                action.accept(this.objects[i], i);
+            }
+        }
+    }
+
     public int count() {
         return this.bitSet.getCount();
     }

@@ -13,6 +13,8 @@ layout(location=0) out vec4 outColour;
 #endif
 
 #import <jbp-lod:lod/gl46/bindings.glsl>
+#import <jbp-lod:util/depthutils.glsl>
+layout(set=0, binding=9) uniform sampler2D depthTex;
 #import <jbp-lod:lod/lighting.glsl>
 #import <jbp-lod:lod/gl46/fog.glsl>
 
@@ -86,6 +88,34 @@ vec4 applyLodFog(vec4 sourceColour) {
 }
 
 
+// Diagnostic colours selected by LOD_DEBUG_VIEW (LodDebugView.java; codes must match):
+// 1 normal, 2 uv, 3 face, 4 model, 5 depth. Output replaces shading and fog; discards above still apply.
+#ifdef LOD_DEBUG_VIEW
+vec3 categorical(float t) {
+    return 0.5 + 0.5 * cos(6.2831853 * (vec3(t) + vec3(0.0, 0.33, 0.67)));
+}
+
+vec3 lodDebugColour() {
+    if (LOD_DEBUG_VIEW == 1) {
+        uint face = getFace();
+        uint axis = face >> 1u;
+        float side = (face & 1u) != 0u ? 1.0 : -1.0;
+        vec3 normal = vec3(axis == 0u ? side : 0.0, axis == 1u ? side : 0.0, axis == 2u ? side : 0.0);
+        return normal * 0.5 + 0.5;
+    }
+    if (LOD_DEBUG_VIEW == 2) {
+        return vec3(fract(uv), 0.0);
+    }
+    if (LOD_DEBUG_VIEW == 3) {
+        return categorical(float(getFace()) / 8.0);
+    }
+    if (LOD_DEBUG_VIEW == 4) {
+        return categorical(fract(float(getModelId()) * 0.6180339887));
+    }
+    return vec3(gl_FragCoord.z);
+}
+#endif
+
 void main() {
     vec2 tile;
     vec2 uv2 = modf(uv, tile)*(1.0/(vec2(3.0,2.0)*256.0));
@@ -126,8 +156,14 @@ void main() {
     }
     #endif
 
+    if (DEPTH_SCALAR_COMPARE(gl_FragCoord.z, texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r)) {
+        discard;
+    }
+
     #ifndef PATCHED_SHADER
-    #ifdef DEBUG_SOLID
+    #if defined(LOD_DEBUG_VIEW)
+    outColour = vec4(lodDebugColour(), 1.0);
+    #elif defined(DEBUG_SOLID)
     outColour = vec4(1.0, 0.0, 1.0, 1.0);
     #else
     colour = computeColour(texPos, colour);

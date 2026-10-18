@@ -45,8 +45,8 @@ final class LodRenderBarriers {
         }
     }
 
-    /** Transitions a fresh/old-layout D32 image to GENERAL ahead of its next depth write. */
-    static void depthImageToGeneral(VkCommandBuffer commandBuffer, long image, int oldLayout,
+    /** Transitions an old-layout depth(/stencil) image to GENERAL ahead of its next attachment write. */
+    static void depthImageToGeneral(VkCommandBuffer commandBuffer, long image, int oldLayout, int aspectMask,
                                     long srcStages, long srcAccess, long dstStages, long dstAccess) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack).sType$Default()
@@ -55,7 +55,7 @@ final class LodRenderBarriers {
                     .oldLayout(oldLayout).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(image);
-            barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1)
+            barrier.subresourceRange().aspectMask(aspectMask).baseMipLevel(0).levelCount(1)
                     .baseArrayLayer(0).layerCount(1);
             vkCmdPipelineBarrier2KHR(commandBuffer, VkDependencyInfo.calloc(stack).sType$Default()
                     .pImageMemoryBarriers(barrier));

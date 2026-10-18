@@ -95,4 +95,9 @@ final class NodeChildRequest {
     public byte getMsk() {
         return this.mask;
     }
+
+    /** Bit mask of required children whose mesh result has not arrived yet. */
+    public int missingMask() {
+        return (this.mask & ~this.results) & 0xFF;
+    }
 }

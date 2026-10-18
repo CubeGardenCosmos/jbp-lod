@@ -22,6 +22,20 @@ class LodCompositeDepthTest {
     }
 
     @Test
+    void coincidentLodDepthReprojectsOntoVanillaSurfaceWithoutBias() {
+        for (boolean reverse : new boolean[]{false, true}) {
+            for (boolean zeroToOne : new boolean[]{false, true}) {
+                LodDepthConversion game = perspective(0.05, 4096, reverse, zeroToOne);
+                LodDepthConversion lod = perspective(16, 65536, reverse, zeroToOne);
+                for (double w : new double[]{32, 128, 512, 2048}) {
+                    assertEquals(game.depthAtDistance(w), lod.convertTo(game, lod.depthAtDistance(w)), 1e-6,
+                            "LOD depth must reproject onto the vanilla surface at w=" + w);
+                }
+            }
+        }
+    }
+
+    @Test
     void conversionSupportsDifferentSourceAndDestinationDepthConventions() {
         LodDepthConversion lod = perspective(16, 65536, true, true);
         LodDepthConversion game = perspective(0.05, 4096, false, false);

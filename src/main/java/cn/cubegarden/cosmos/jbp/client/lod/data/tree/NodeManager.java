@@ -65,6 +65,10 @@ public final class NodeManager {
     private final IntOpenHashSet topLevelNodeIds = new IntOpenHashSet();
     private final LongOpenHashSet topLevelNodes = new LongOpenHashSet();
     private int activeNodeRequestCount;
+    private long droppedInactiveGeometry;
+    private long droppedUnwatchedGeometry;
+    private long evictionsApplied;
+    private long childWatchesSkippedInitialMesh;
 
     private IntConsumer topLevelNodeIdAddedCallback;
     private IntConsumer topLevelNodeIdRemovedCallback;
@@ -181,6 +185,7 @@ public final class NodeManager {
         long pos = sectionResult.position;
         int nodeId = this.activeSectionMap.get(pos);
         if (nodeId == -1) {
+            droppedInactiveGeometry++;
             return;//Geometry for an inactive position is discarded
         }
 
@@ -223,6 +228,7 @@ public final class NodeManager {
                     throw new IllegalStateException();
                 }
                 LOGGER.warn("Recieved geometry update but not watching it, discarding");
+                droppedUnwatchedGeometry++;
                 return;
             }
 
@@ -354,6 +360,9 @@ public final class NodeManager {
                             long cPos = makeChildPos(pos, i);
                             if (this.activeSectionMap.put(cPos, requestId | NODE_TYPE_REQUEST | REQUEST_TYPE_CHILD) != -1) {
                                 throw new IllegalStateException("Child pos was already in active section tracker but was part of a request");
+                            }
+                            if ((this.watcher.get(cPos) & UPDATE_TYPE_BLOCK_BIT) != 0) {
+                                this.childWatchesSkippedInitialMesh++;
                             }
                             if (!this.watcher.watch(cPos, DEFAULT_UPDATE_FLAGS)) {
                                 throw new IllegalStateException("Child pos update router issue");
@@ -1115,6 +1124,9 @@ public final class NodeManager {
             }
 
             //Watch and request the child node at the given position
+            if ((this.watcher.get(childPos) & UPDATE_TYPE_BLOCK_BIT) != 0) {
+                this.childWatchesSkippedInitialMesh++;
+            }
             if (!this.watcher.watch(childPos, DEFAULT_UPDATE_FLAGS)) {
                 throw new IllegalStateException("Failed to watch childPos");
             }
@@ -1225,6 +1237,7 @@ public final class NodeManager {
             this.processRequest(pPos);//Request geometry
         } else {
             //Convert to leaf node
+            evictionsApplied++;
             this.recurseRemoveChildNodes(pPos);
 
             //Make node a leaf
@@ -1249,6 +1262,7 @@ public final class NodeManager {
                         + SectionPos.pretty(pos) + " resulted in full removal");
             }
             //Remove geometry and set to null
+            evictionsApplied++;
             this.removeGeometryCached(pos, meshId);
             this.nodeData.setNodeGeometry(nodeId, NULL_GEOMETRY_ID);
             this.invalidateNode(nodeId);//Only need to invalidate on change
@@ -1300,6 +1314,36 @@ public final class NodeManager {
 
     public int getActiveRequestCount() {
         return this.singleRequests.count() + this.childRequests.count();
+    }
+
+    /** Diagnostic snapshot of pending requests and drop counters; must be called on the owning thread. */
+    public NodeDiagnostics diagnosticsSnapshot() {
+        int[] single = new int[2];
+        this.singleRequests.forEachAllocated((request, id) -> {
+            single[0]++;
+            if (!request.hasMeshSet()) single[1]++;
+        });
+        int[] child = new int[6];
+        this.childRequests.forEachAllocated((request, id) -> {
+            child[0]++;
+            int missing = request.missingMask();
+            if (missing == 0) {
+                if (request.getMsk() == 0) child[5]++;
+                else child[4]++;
+                return;
+            }
+            child[1]++;
+            for (int i = 0; i < 8; i++) {
+                if ((missing & (1 << i)) == 0) continue;
+                child[2]++;
+                if ((this.watcher.get(makeChildPos(request.getPosition(), i)) & UPDATE_TYPE_BLOCK_BIT) == 0) {
+                    child[3]++;
+                }
+            }
+        });
+        return new NodeDiagnostics(this.droppedInactiveGeometry, this.droppedUnwatchedGeometry,
+                this.evictionsApplied, this.childWatchesSkippedInitialMesh,
+                single[0], single[1], child[0], child[1], child[2], child[3], child[4], child[5]);
     }
 
     public int getCurrentMaxNodeId() {

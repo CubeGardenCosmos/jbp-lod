@@ -74,6 +74,7 @@ public final class LodNodeService implements AutoCloseable {
     private volatile long snapshotGeometryUsedBytes;
     private volatile long snapshotGeometryCapacityBytes;
     private volatile int snapshotRequests;
+    private volatile NodeDiagnostics snapshotDiagnostics = NodeDiagnostics.EMPTY;
 
     public LodNodeService(int maxNodeCount, int maxSectionCount, long geometryCapacityBytes,
                           MeshRequests meshRequests) {
@@ -225,6 +226,11 @@ public final class LodNodeService implements AutoCloseable {
         return this.snapshotRequests;
     }
 
+    /** Node request and drop/eviction diagnostics as of the worker's last batch; safe to read from any thread. */
+    public NodeDiagnostics diagnosticsSnapshot() {
+        return this.snapshotDiagnostics;
+    }
+
     /** Geometry heap bytes in use as of the worker's last batch; safe to read from any thread. */
     public long geometryUsedBytesSnapshot() {
         return this.snapshotGeometryUsedBytes;
@@ -335,6 +341,7 @@ public final class LodNodeService implements AutoCloseable {
         this.snapshotGeometryUsedBytes = this.geometry.getGeometryUsedBytes();
         this.snapshotGeometryCapacityBytes = this.geometry.getGeometryCapacityBytes();
         this.snapshotRequests = this.manager.getActiveRequestCount();
+        this.snapshotDiagnostics = this.manager.diagnosticsSnapshot();
         if (workDone == 0) {
             return 0;
         }

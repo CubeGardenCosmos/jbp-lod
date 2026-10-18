@@ -14,7 +14,9 @@
     "SpriteContentsAccessor",
     "MixinVulkanDevice",
     "MixinVulkanCommandEncoder",
-    "MixinDefaultChunkRenderer"
+    "MixinDefaultChunkRenderer",
+    "MixinRenderSectionManager",
+    "MixinVisibleChunkCollector"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -19,7 +19,8 @@ void main() {
     float distance = abs(denominator) < 1e-9 ? 3.0e38 : Convert.lodParams.y / denominator;
     if (!(distance > 0.0)) discard;
     float gameNdc = Convert.gameParams.x + Convert.gameParams.y / distance;
-    gl_FragDepth = clamp(Convert.gameParams.z > 0.5 ? gameNdc : gameNdc * 0.5 + 0.5, 0.0, 1.0);
+    float screenDepth = Convert.gameParams.z > 0.5 ? gameNdc : gameNdc * 0.5 + 0.5;
+    gl_FragDepth = clamp(screenDepth, 0.0, 1.0);
     // Geometry uses SRC_ALPHA / ONE_MINUS_SRC_ALPHA onto transparent black. Its stored
     // aggregate is premultiplied; recover straight alpha for the game's ALPHA pipeline.
     color = vec4(accumulated.rgb / accumulated.a, accumulated.a);

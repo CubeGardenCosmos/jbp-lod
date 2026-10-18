@@ -59,7 +59,7 @@ final class LodOffscreenPass implements AutoCloseable {
                             VulkanLodPipeline.BlendMode.ALPHA), frameSlots);
             for (int slot = 0; slot < frameSlots; slot++) {
                 colors[slot] = new LodColorTarget(game, this.colorFormat, width, height);
-                depths[slot] = LodDepthTarget.create(game, width, height);
+                depths[slot] = LodDepthTarget.create(game, width, height, LodDepthTarget.SEED_FORMAT);
                 params[slot] = GpuBuffer.allocate(game, 32, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
                 composite.writeCombinedImageSampler(slot, 0, sampler, colors[slot].view(), VK_IMAGE_LAYOUT_GENERAL);
                 composite.writeCombinedImageSampler(slot, 1, sampler, depths[slot].view(), VK_IMAGE_LAYOUT_GENERAL);
@@ -79,7 +79,7 @@ final class LodOffscreenPass implements AutoCloseable {
     long depthView(int slot) { return depths[slot].view(); }
     LodDepthTarget depthTarget(int slot) { return depths[slot]; }
 
-    /** Depth must already have been seeded by LodDepthConvertPass for this slot. */
+    /** Depth and stencil must already have been seeded by LodDepthConvertPass for this slot. */
     void begin(VkCommandBuffer commandBuffer, int slot, boolean clearColor) {
         colors[slot].prepare(commandBuffer);
         LodRenderBarriers.memory(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -92,10 +92,13 @@ final class LodOffscreenPass implements AutoCloseable {
                     .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             color.get(0).clearValue().color().float32(0, 0).float32(1, 0).float32(2, 0).float32(3, 0);
             VkRenderingAttachmentInfo depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
-                    .imageView(depthView(slot)).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .imageView(depths[slot].attachmentView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            VkRenderingAttachmentInfo stencil = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
+                    .imageView(depths[slot].attachmentView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
                     .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default().layerCount(1)
-                    .pColorAttachments(color).pDepthAttachment(depth);
+                    .pColorAttachments(color).pDepthAttachment(depth).pStencilAttachment(stencil);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(width, height);
             vkCmdBeginRenderingKHR(commandBuffer, rendering);

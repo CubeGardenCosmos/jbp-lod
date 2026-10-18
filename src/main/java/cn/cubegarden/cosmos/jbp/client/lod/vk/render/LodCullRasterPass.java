@@ -51,7 +51,7 @@ final class LodCullRasterPass implements AutoCloseable {
         ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/cull/raster.vert", Map.copyOf(defines));
         ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/cull/raster.frag", Map.copyOf(defines));
         this.pipeline = VulkanLodPipeline.create(game, vertex, fragment,
-                VulkanLodPipeline.State.of(VK_FORMAT_UNDEFINED, LodDepthTarget.FORMAT, true, false,
+                VulkanLodPipeline.State.of(VK_FORMAT_UNDEFINED, LodDepthTarget.SEED_FORMAT, true, false,
                         reverseZ ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
                         VulkanLodPipeline.BlendMode.OPAQUE), frameSlots);
     }
@@ -69,10 +69,13 @@ final class LodCullRasterPass implements AutoCloseable {
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkRenderingAttachmentInfo depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
-                    .imageView(target.view()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .imageView(target.attachmentView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            VkRenderingAttachmentInfo stencil = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
+                    .imageView(target.attachmentView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
                     .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default().layerCount(1)
-                    .pDepthAttachment(depth);
+                    .pDepthAttachment(depth).pStencilAttachment(stencil);
             rendering.renderArea().offset().set(0, 0);
             rendering.renderArea().extent().set(target.width(), target.height());
             vkCmdBeginRenderingKHR(commandBuffer, rendering);

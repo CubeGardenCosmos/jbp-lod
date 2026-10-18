@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.runtime;
 
+import cn.cubegarden.cosmos.jbp.client.lod.data.tree.NodeDiagnostics;
+
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -25,6 +27,7 @@ public final class LodStats {
     private volatile long geometryUsedBytes;
     private volatile long geometryCapacityBytes;
     private volatile String queueDepths = "";
+    private volatile NodeDiagnostics nodeDiagnostics = NodeDiagnostics.EMPTY;
 
     public void chunkCaptured() {
         chunksCaptured.incrementAndGet();
@@ -72,8 +75,14 @@ public final class LodStats {
         this.queueDepths = depths;
     }
 
+    /** Node request and drop/eviction diagnostics snapshot from the node service. */
+    public void nodeDiagnosticsSnapshot(NodeDiagnostics diagnostics) {
+        this.nodeDiagnostics = diagnostics;
+    }
+
     /** One line; the field names are the contract the user-facing docs refer to. */
     public String format() {
+        NodeDiagnostics d = this.nodeDiagnostics;
         return "chunks captured=" + chunksCaptured.get()
                 + " sections ingested=" + sectionsIngested.get()
                 + " meshed=" + sectionsMeshed.get()
@@ -87,6 +96,12 @@ public final class LodStats {
                 + " meshWaiting=" + meshWaiting + " meshInFlight=" + meshInFlight
                 + " slots=" + metadataSlots + "/" + slotCapacity
                 + " geometryBytes=" + geometryUsedBytes + "/" + geometryCapacityBytes
-                + " queues[" + queueDepths + "]";
+                + " queues[" + queueDepths + "]"
+                + " requests[single=" + d.singleRequests() + " singleNoMesh=" + d.singleAwaitingMesh()
+                + " child=" + d.childRequests() + " childAwaiting=" + d.childAwaitingMeshes()
+                + " missingChildMeshes=" + d.missingChildMeshes() + " missingUnwatched=" + d.missingChildrenUnwatched()
+                + " satisfiedUnfinished=" + d.satisfiedUnfinishedRequests() + " parked=" + d.parkedAwaitingChildExistence() + "]"
+                + " dropped[inactive=" + d.droppedInactiveGeometry() + " unwatched=" + d.droppedUnwatchedGeometry() + "]"
+                + " evictions=" + d.evictionsApplied() + " childWatchNoMesh=" + d.childWatchesSkippedInitialMesh();
     }
 }

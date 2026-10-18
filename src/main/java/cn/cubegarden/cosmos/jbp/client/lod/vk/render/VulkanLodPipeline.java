@@ -28,6 +28,7 @@ import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
+import org.lwjgl.vulkan.VkStencilOpState;
 import org.lwjgl.vulkan.VkViewport;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
@@ -52,6 +53,8 @@ import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_A_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_B_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_G_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_R_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_ALWAYS;
+import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_EQUAL;
 import static org.lwjgl.vulkan.VK10.VK_CULL_MODE_NONE;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -72,6 +75,8 @@ import static org.lwjgl.vulkan.VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 import static org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT;
 import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_FRAGMENT_BIT;
 import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_VERTEX_BIT;
+import static org.lwjgl.vulkan.VK10.VK_STENCIL_OP_KEEP;
+import static org.lwjgl.vulkan.VK10.VK_STENCIL_OP_REPLACE;
 import static org.lwjgl.vulkan.VK10.VK_SUCCESS;
 import static org.lwjgl.vulkan.VK10.vkAllocateDescriptorSets;
 import static org.lwjgl.vulkan.VK10.vkCmdBindDescriptorSets;
@@ -445,9 +450,15 @@ public final class VulkanLodPipeline implements AutoCloseable {
         VkPipelineMultisampleStateCreateInfo multisample = VkPipelineMultisampleStateCreateInfo.calloc(stack)
                 .sType$Default().rasterizationSamples(VK_SAMPLE_COUNT_1_BIT).sampleShadingEnable(false)
                 .alphaToCoverageEnable(false).alphaToOneEnable(false);
+        VkStencilOpState stencilOp = VkStencilOpState.calloc(stack)
+                .failOp(VK_STENCIL_OP_KEEP).passOp(state.stencil().passOp())
+                .depthFailOp(VK_STENCIL_OP_KEEP).compareOp(state.stencil().compareOp())
+                .compareMask(0xFF).writeMask(state.stencil().writeMask())
+                .reference(state.stencil().reference());
         VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
                 .sType$Default().depthTestEnable(state.depthTest()).depthWriteEnable(state.depthWrite())
-                .depthCompareOp(state.depthCompareOp()).depthBoundsTestEnable(false).stencilTestEnable(false)
+                .depthCompareOp(state.depthCompareOp()).depthBoundsTestEnable(false)
+                .stencilTestEnable(state.stencil().test()).front(stencilOp).back(stencilOp)
                 .minDepthBounds(0.0f).maxDepthBounds(1.0f);
 
         boolean hasColor = state.colorFormat() != VK_FORMAT_UNDEFINED;
@@ -505,15 +516,34 @@ public final class VulkanLodPipeline implements AutoCloseable {
     }
 
     /**
+     * Stencil test of one LOD pipeline. The compare mask is always 0xFF and the fail and depth-fail
+     * ops are always KEEP.
+     */
+    public record Stencil(boolean test, int compareOp, int passOp, int reference, int writeMask) {
+        /** Stencil test disabled. */
+        public static final Stencil OFF = new Stencil(false, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_KEEP, 0, 0);
+        /** LOD draw gate, upstream GL_EQUAL 1: only stencil-1 (sky) pixels pass; stencil is not written. */
+        public static final Stencil LOD_ON_SKY = new Stencil(true, VK_COMPARE_OP_EQUAL, VK_STENCIL_OP_KEEP, 1, 0);
+        /** Seed pass: every pixel that survives the discard writes stencil 0 (upstream setup_stencil_depth). */
+        public static final Stencil SEED_VANILLA = new Stencil(true, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE,
+                0, 0xFF);
+    }
+
+    /**
      * Fixed-function state of one LOD pipeline. {@code colorFormat == VK_FORMAT_UNDEFINED} means
      * a depth-only scope (visibility raster / depth conversion).
      */
     public record State(int colorFormat, int depthFormat, boolean depthTest, boolean depthWrite,
-                        int depthCompareOp, BlendMode blendMode, int cullMode) {
+                        int depthCompareOp, BlendMode blendMode, int cullMode, Stencil stencil) {
         public static State of(int colorFormat, int depthFormat, boolean depthTest, boolean depthWrite,
                                int depthCompareOp, BlendMode blendMode) {
             return new State(colorFormat, depthFormat, depthTest, depthWrite, depthCompareOp, blendMode,
-                    VK_CULL_MODE_NONE);
+                    VK_CULL_MODE_NONE, Stencil.OFF);
+        }
+
+        public State withStencil(Stencil value) {
+            return new State(colorFormat, depthFormat, depthTest, depthWrite, depthCompareOp, blendMode,
+                    cullMode, value);
         }
     }
 

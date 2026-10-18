@@ -125,6 +125,7 @@ public final class LodSession {
             stats.geometrySnapshot(nodes.geometryUsedBytesSnapshot(), nodes.geometryCapacityBytesSnapshot(),
                     SECTION_CAPACITY);
             stats.queueSnapshot(nodes.queueDepthsSnapshot());
+            stats.nodeDiagnosticsSnapshot(nodes.diagnosticsSnapshot());
             ModelFactory factory = models.factory();
             if (factory != null) {
                 stats.modelSnapshot(factory.bakedCount(), factory.inflightCount());
