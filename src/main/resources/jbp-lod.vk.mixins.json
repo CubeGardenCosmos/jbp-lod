@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "FrontendGpuDeviceAccessor",
+    "VulkanDeviceAccessor",
+    "FrontendRenderPassAccessor",
+    "VulkanRenderPassAccessor",
+    "StairBlockAccessor",
+    "SpriteContentsAccessor",
+    "MixinVulkanDevice",
+    "MixinDefaultChunkRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

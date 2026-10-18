@@ -1,0 +1,30 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/util/memcpy.comp
+#define WORK_SIZE 256
+layout(local_size_x = WORK_SIZE) in;
+
+// Header data describes each copy's source, destination, and size.
+layout(set = 0, binding = INPUT_HEADER_BUFFER_BINDING, std430) restrict readonly buffer InputHeaderBuffer {
+    uvec4[] dataCopyHeader;
+};
+
+layout(set = 0, binding = INPUT_DATA_BUFFER_BINDING, std430) restrict readonly buffer InputDataBuffer {
+    uvec2[] dataInBuffer;
+};
+
+layout(set = 0, binding = OUTPUT_BUFFER_BINDING, std430) restrict writeonly buffer OutputBuffer {
+    uvec2[] outputBuffer;
+};
+
+void main() {
+    uvec4 job = dataCopyHeader[gl_WorkGroupID.x];
+    uint src = job.x;
+    uint dst = job.y;
+    uint siz = job.z;
+
+    uint workPerThread = (siz + 255u) >> 8u;
+    uint start = gl_LocalInvocationID.x * workPerThread + src;
+    uint diff = dst - src;
+    for (uint i = start; i < min(start + workPerThread, siz + src); i++) {
+        outputBuffer[i + diff] = dataInBuffer[i];
+    }
+}

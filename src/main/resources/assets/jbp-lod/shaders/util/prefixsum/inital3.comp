@@ -1,0 +1,111 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/util/prefixsum/inital3.comp
+#ifdef USE_SUBGROUP
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#define WORK_SIZE 256
+
+// Initial parallel prefix sum over batches of WORK_SIZE entries.
+layout(local_size_x = WORK_SIZE) in;
+
+layout(set = 0, binding = IO_BUFFER, std430) buffer InputBuffer {
+    uvec4[] ioCount;
+};
+
+shared uint warpPrefixSum[8]; // At most eight 32-lane subgroups per workgroup.
+
+void main() {
+    if (gl_SubgroupSize == 32u) {
+        #ifdef IS_INTEL
+        uint subgroupId = gl_LocalInvocationID.x >> 5u;
+        #else
+        uint subgroupId = gl_SubgroupID;
+        #endif
+
+        uint gid = gl_GlobalInvocationID.x;
+        uvec4 count = uvec4(0u);
+        uint sum = 0u;
+        {
+            uvec4 dat = ioCount[gid];
+            count.yzw = dat.xyz;
+            count.z += count.y;
+            count.w += count.z;
+            sum = count.w + dat.w;
+        }
+        subgroupBarrier();
+
+        count += subgroupExclusiveAdd(sum);
+
+        if (gl_SubgroupInvocationID == 31u) {
+            warpPrefixSum[subgroupId] = count.x + sum;
+        }
+
+        memoryBarrierShared();
+        barrier();
+
+        if (gl_LocalInvocationID.x < 8u) {
+            uint val = warpPrefixSum[gl_SubgroupInvocationID];
+            subgroupBarrier();
+            warpPrefixSum[gl_SubgroupInvocationID] = subgroupExclusiveAdd(val);
+        }
+
+        memoryBarrierShared();
+        barrier();
+
+        count += warpPrefixSum[subgroupId];
+        ioCount[gid] = count;
+    } else {
+        #ifdef IS_INTEL
+        uint subgroupId = gl_LocalInvocationID.x >> 6u;
+        #else
+        uint subgroupId = gl_SubgroupID;
+        #endif
+
+        uint gid = gl_GlobalInvocationID.x;
+        uvec4 count = uvec4(0u);
+        uint sum = 0u;
+        {
+            uvec4 dat = ioCount[gid];
+            count.yzw = dat.xyz;
+            count.z += count.y;
+            count.w += count.z;
+            sum = count.w + dat.w;
+        }
+        subgroupBarrier();
+
+        count += subgroupExclusiveAdd(sum);
+
+        if (gl_SubgroupInvocationID == 63u) {
+            warpPrefixSum[subgroupId] = count.x + sum;
+        }
+
+        memoryBarrierShared();
+        barrier();
+
+        #ifdef IS_WINDOWS
+        // Work around AMD's cross-subgroup shared-value issue on Windows.
+        uint val = warpPrefixSum[gl_LocalInvocationID.x & 3u];
+        subgroupBarrier();
+        uint extraJank = subgroupExclusiveAdd(val);
+        barrier();
+        if (gl_LocalInvocationID.x < 4u) {
+            warpPrefixSum[gl_LocalInvocationID.x] = extraJank;
+        }
+        #else
+        if (gl_LocalInvocationID.x < 4u) {
+            uint val = warpPrefixSum[gl_SubgroupInvocationID];
+            subgroupBarrier();
+            warpPrefixSum[gl_SubgroupInvocationID] = subgroupExclusiveAdd(val);
+        }
+        #endif
+
+        memoryBarrierShared();
+        barrier();
+
+        count += warpPrefixSum[subgroupId];
+        ioCount[gid] = count;
+    }
+}
+#else
+#import <jbp-lod:util/prefixsum/simple.comp>
+#endif

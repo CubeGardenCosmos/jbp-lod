@@ -1,0 +1,611 @@
+package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
+
+import cn.cubegarden.cosmos.jbp.client.lod.JbpLodClient;
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodExternalTargets;
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodExternalTargetsProvider;
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameContext;
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
+import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeExecutor;
+import cn.cubegarden.cosmos.jbp.client.lod.model.ModelAtlasLayout;
+import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
+import cn.cubegarden.cosmos.jbp.client.lod.model.ModelResources;
+import cn.cubegarden.cosmos.jbp.client.lod.runtime.LodRuntime;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.caps.DeviceCaps;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuCompletion;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuRetireQueue;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.HizPyramid;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodFrameBuffers;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodNodeGpuBuffers;
+import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
+import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
+import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
+import net.caffeinemc.mods.sodium.client.render.viewport.CameraTransform;
+import net.caffeinemc.mods.sodium.client.util.FogParameters;
+import net.minecraft.client.Minecraft;
+import org.joml.Matrix4f;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_GREATER_OR_EQUAL;
+import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_LESS_OR_EQUAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL;
+import static org.lwjgl.vulkan.VK10.VK_INDEX_TYPE_UINT16;
+import static org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer;
+import static org.lwjgl.vulkan.VK10.vkCmdDrawIndexedIndirect;
+import static org.lwjgl.vulkan.VK10.vkDeviceWaitIdle;
+import static org.lwjgl.vulkan.VK12.vkCmdDrawIndexedIndirectCount;
+
+/**
+ * Vulkan LOD renderer hooked into Sodium's CUTOUT pass.
+ *
+ * <p>Per frame, at the head of the CUTOUT terrain render ({@link #beforeCutout}) it records the LOD
+ * pre-pass (node uploads, depth conversion, HiZ, hierarchical traversal, occlusion raster, command
+ * generation) into the LOD frame slot's own command buffer and submits it to the game's graphics queue
+ * ahead of the game's command buffer; just before the CUTOUT pass ends ({@link #drawCutout}) it records one
+ * indexed indirect draw of the GPU-generated opaque command span into the game's open dynamic-rendering
+ * scope, depth-testing (read-only) against the game's depth buffer. No barrier is recorded inside the scope,
+ * no queue/device wait occurs per frame, and no second device exists.</p>
+ *
+ * <p>Failures are logged once and latch the renderer off until the scope, resource, provider or LOD runtime
+ * generation changes; the game's own rendering is never aborted by this hook.</p>
+ */
+public final class VulkanLodRenderer {
+    public static final String RENDER_PROPERTY = "jbp.lod.render";
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("jbp-lod-render");
+    private static final float SUBDIVISION_SIZE = 64.0f;
+    /** {@code VkDrawIndexedIndirectCommand} stride (V3 contract: 20 bytes). */
+    private static final int DRAW_COMMAND_STRIDE = 20;
+    private static final int LIGHTMAP_BINDING = 7;
+    private static final int FOG_BINDING = 8;
+    private static final VulkanLodRenderer INSTANCE = new VulkanLodRenderer();
+
+    private final LodRenderState state = new LodRenderState();
+    private final Set<String> reportedInvalid = new HashSet<>();
+    private Resources resources;
+    private DeviceCaps caps;
+    private long capsDevice;
+    private long frameCounter;
+    private long gpuRuntimeGeneration = -1;
+    private boolean gpuReverseZ;
+    private long[] failedGenerations;
+
+    private VulkanLodRenderer() {
+    }
+
+    /** Default on; {@code -Djbp.lod.render=false} disables the renderer (the V1 probe is independent). */
+    public static boolean enabled() {
+        return !"false".equalsIgnoreCase(System.getProperty(RENDER_PROPERTY));
+    }
+
+    /** Registers scope/resource-reload invalidation listeners; idempotent. */
+    public static void registerLifecycle() {
+        LodRenderLifecycle.registerOnce();
+    }
+
+    /** Releases device resources immediately at client shutdown (the only place a device wait is used). */
+    public static void shutdown() {
+        INSTANCE.releaseNow("client shutdown");
+    }
+
+    /**
+     * Called at the head of the CUTOUT terrain render on the render thread. Returns the frame to hand to
+     * {@link #drawCutout}, or null when no LOD frame is recorded.
+     */
+    public static Frame beforeCutout(ChunkRenderMatrices matrices, TerrainRenderPass terrainPass,
+                                     RenderPass pass, CameraTransform camera, FogParameters fog) {
+        if (!enabled()) {
+            return null;
+        }
+        return INSTANCE.prepare(matrices, terrainPass, pass, camera, fog);
+    }
+
+    /** Called inside the CUTOUT dynamic-rendering scope, before it ends. */
+    public static void drawCutout(Frame frame) {
+        if (frame != null) {
+            INSTANCE.record(frame);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    private Frame prepare(ChunkRenderMatrices matrices, TerrainRenderPass terrainPass, RenderPass pass,
+                          CameraTransform camera, FogParameters fog) {
+        registerLifecycle();
+        long[] generations = {LodRenderLifecycle.scopeGeneration(), LodRenderLifecycle.resourceGeneration(),
+                LodExternalTargets.generation()};
+        if (failedGenerations != null) {
+            if (java.util.Arrays.equals(failedGenerations, generations)) {
+                return null;
+            }
+            failedGenerations = null;
+        }
+        LodFrameBuffers slot = null;
+        try {
+            Optional<LodRuntime> active = JbpLodClient.activeRuntime();
+            if (active.isEmpty()) {
+                release("no active LOD scope");
+                return null;
+            }
+            LodRuntime runtime = active.get();
+            long frameNumber = ++frameCounter;
+            GameVulkan.Snapshot game = GameVulkan.current();
+            LodFrameContext context = VanillaLodExternalTargetsProvider.capture(frameNumber, matrices,
+                    terrainPass, pass, camera, fog);
+            LodExternalTargetsProvider provider = LodExternalTargets.currentOr(VanillaLodExternalTargetsProvider.INSTANCE);
+            LodFrameTargets targets = provider.targetsFor(context);
+
+            DeviceCaps deviceCaps = capabilities(game);
+            LodTargetValidator.Result validation = LodTargetValidator.validate(context.dynamicRenderingActive(),
+                    context.deviceAddress(), context.renderScopeIdentity(), context.renderAreaX(),
+                    context.renderAreaY(), context.renderAreaWidth(), context.renderAreaHeight(),
+                    targets, deviceCaps);
+            if (!validation.valid()) {
+                if (reportedInvalid.add(validation.reason())) {
+                    LOGGER.warn("[JBP-LOD] LOD draw skipped: {}", validation.reason());
+                }
+                return null;
+            }
+
+            boolean zeroToOne = game.deviceInfo().isZZeroToOne();
+            LodDepthConversion gameDepth = LodDepthConversion.fromProjection(
+                    targets.matrices().depthProjection(), zeroToOne);
+            LodDepthConversion lodDepth = LodDepthConversion.fromProjection(
+                    targets.matrices().projection(), zeroToOne);
+            boolean reverseZ = gameDepth.reverseZ();
+            LodDrawPlan plan = LodDrawPlan.choose(deviceCaps.drawIndirectCount(), deviceCaps.multiDrawIndirect(),
+                    deviceCaps.maxDrawIndirectCount(), LodFrameBuffers.drawCapacity(LodFrameBuffers.DrawRegion.OPAQUE));
+
+            runtime.ensureGpu(game, reverseZ);
+            if (gpuRuntimeGeneration != runtime.generation()) {
+                gpuRuntimeGeneration = runtime.generation();
+                gpuReverseZ = reverseZ;
+            } else if (gpuReverseZ != reverseZ) {
+                throw new IllegalStateException("depth convention changed to reverseZ=" + reverseZ
+                        + " after the LOD compute executor was built; it is fixed per LOD runtime");
+            }
+            runtime.updateCamera(context.cameraX(), context.cameraZ());
+
+            LodFrameTargets.ImageTarget color = targets.color();
+            LodFrameTargets.ImageTarget depth = targets.depth();
+            LodRenderState.ResourceKey key = new LodRenderState.ResourceKey(game.device().address(),
+                    color.vkFormat(), depth.vkFormat(), color.width(), color.height(), color.sampleCount(),
+                    generations[0], generations[1], generations[2], runtime.generation(), reverseZ,
+                    plan.mode() == LodDrawPlan.Mode.INDIRECT_COUNT);
+            LodRenderState.Action action = state.update(key);
+            if (action == LodRenderState.Action.REBUILD || resources == null) {
+                releaseResources("target/resource configuration changed");
+                state.update(key);
+                resources = Resources.create(game, deviceCaps, key, runtime.frameBuffers().framesInFlight());
+                LOGGER.info("[JBP-LOD] V4 renderer built: device={} color={} depth={} extent={}x{} samples={} "
+                                + "reverseZ={} draw-path={} cull-raster=on depth-conversion=on",
+                        deviceCaps.deviceName(), color.vkFormat(), depth.vkFormat(), color.width(), color.height(),
+                        color.sampleCount(), reverseZ, plan.describe());
+            }
+            Resources res = resources;
+
+            ModelProvider models = runtime.models();
+            models.tick();
+            ModelResources modelResources = models.acquire();
+            if (modelResources == null) {
+                return null;
+            }
+            boolean modelsHandedOff = false;
+            try {
+                slot = runtime.frameBuffers().beginFrame(frameNumber);
+                if (slot == null) {
+                    modelResources.close();
+                    modelsHandedOff = true;
+                    return null;
+                }
+                res.consumeRetiredSlot(runtime, slot);
+                res.writeDrawDescriptors(slot, runtime.nodeBuffers(), modelResources, targets, gameDepth);
+
+                float[] mvp = LodFrameMath.multiply(targets.matrices().projection(), targets.matrices().modelView());
+                LodImageViews.Owned gameDepthView = LodImageViews.borrowDepthView(game.device(), depth.image(),
+                        depth.vkFormat());
+                boolean runCleaner;
+                try {
+                    runCleaner = LodFrameMath.shouldRunCleaner(runtime.nodeBuffers().geometryCapacityBytes(),
+                            runtime.nodeBuffers().geometryUsedBytes());
+                    VkCommandBuffer commandBuffer = slot.beginCommands();
+                    FrameHooks hooks = new FrameHooks(res, runtime, gameDepthView.view(), gameDepth, lodDepth);
+                    runtime.recordUploads(commandBuffer);
+                    LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(frameNumber, mvp,
+                            context.cameraX(), context.cameraY(), context.cameraZ(),
+                            color.width(), color.height(), SUBDIVISION_SIZE, runtime.renderDistanceSections(),
+                            runtime.requestQueueSize(), runtime.nodeInputs(),
+                            runtime.nodeBuffers().sectionMetadata(), runtime.takeVisibilityOps(), runCleaner,
+                            runtime.cleanerMaxNodeId(), hooks);
+                    runtime.executor().recordFrame(commandBuffer, slot, inputs);
+                    runtime.frameBuffers().submitCommands(slot);
+                } catch (RuntimeException | Error failure) {
+                    // The command buffer was not submitted, so the view can be destroyed immediately.
+                    gameDepthView.close();
+                    throw failure;
+                }
+                // Submitted: the slot's retirement fence now guards the model snapshot and the depth view.
+                slot.retireAfterUse(modelResources);
+                modelsHandedOff = true;
+                slot.retireAfterUse(gameDepthView);
+                res.markSlotSubmitted(slot.slotIndex(), runCleaner);
+                runtime.afterSubmit(slot);
+                res.hiz.retireReplaced(slot::retireAfterUse);
+            } catch (RuntimeException | Error failure) {
+                abandonSlot(slot);
+                if (!modelsHandedOff) {
+                    modelResources.close();
+                }
+                throw failure;
+            }
+            return new Frame(context, slot, res, plan);
+        } catch (RuntimeException | Error failure) {
+            fail(failure, generations);
+            return null;
+        }
+    }
+
+    private void record(Frame frame) {
+        try {
+            if (frame.resources != resources) {
+                throw new IllegalStateException("LOD resources were replaced between pre-pass and draw");
+            }
+            Resources res = frame.resources;
+            LodFrameBuffers slot = frame.slot;
+            LodFrameContext context = frame.context;
+            VkCommandBuffer commandBuffer = context.commandBuffer();
+            res.drawPipeline.bind(commandBuffer, slot.slotIndex(), context.renderAreaX(), context.renderAreaY(),
+                    context.renderAreaWidth(), context.renderAreaHeight());
+            vkCmdBindIndexBuffer(commandBuffer, res.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+            recordOpaqueDraw(commandBuffer, frame.plan, slot);
+            if (!res.drawLogged) {
+                res.drawLogged = true;
+                LOGGER.info("[JBP-LOD] V4 CUTOUT draw recorded: frame={} slot={} path={} area={}x{}+{}+{}; "
+                                + "the opaque draw count is generated and consumed on the GPU and is not read back",
+                        context.frameNumber(), slot.slotIndex(), frame.plan.describe(), context.renderAreaWidth(),
+                        context.renderAreaHeight(), context.renderAreaX(), context.renderAreaY());
+            }
+        } catch (RuntimeException | Error failure) {
+            fail(failure, new long[]{LodRenderLifecycle.scopeGeneration(), LodRenderLifecycle.resourceGeneration(),
+                    LodExternalTargets.generation()});
+        }
+    }
+
+    /** Submits the opaque command span per the chosen plan; never reads the count on the CPU. */
+    static void recordOpaqueDraw(VkCommandBuffer commandBuffer, LodDrawPlan plan, LodFrameBuffers slot) {
+        long commands = slot.drawCommands().handle();
+        long offset = LodFrameBuffers.commandByteOffset(LodFrameBuffers.DrawRegion.OPAQUE);
+        int stride = DRAW_COMMAND_STRIDE;
+        switch (plan.mode()) {
+            case INDIRECT_COUNT -> vkCmdDrawIndexedIndirectCount(commandBuffer, commands, offset,
+                    slot.drawControl().handle(),
+                    LodFrameBuffers.drawCountByteOffset(LodFrameBuffers.DrawRegion.OPAQUE),
+                    plan.maxDraws(), stride);
+            case MULTI_DRAW_INDIRECT -> vkCmdDrawIndexedIndirect(commandBuffer, commands, offset,
+                    plan.maxDraws(), stride);
+            case SINGLE_DRAW_LOOP -> {
+                for (int draw = 0; draw < plan.maxDraws(); draw++) {
+                    vkCmdDrawIndexedIndirect(commandBuffer, commands, offset + (long) draw * stride, 1, stride);
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    private DeviceCaps capabilities(GameVulkan.Snapshot game) {
+        long device = game.device().address();
+        if (caps == null || capsDevice != device) {
+            DeviceCaps inspected = DeviceCaps.inspect(game);
+            inspected.requireCore();
+            if (!inspected.drawIndirectFirstInstance()) {
+                throw new IllegalStateException("the game device does not enable drawIndirectFirstInstance; "
+                        + "the LOD draw ID is carried in the indirect command's firstInstance");
+            }
+            caps = inspected;
+            capsDevice = device;
+        }
+        return caps;
+    }
+
+    private void abandonSlot(LodFrameBuffers slot) {
+        if (slot == null) {
+            return;
+        }
+        try {
+            slot.endCommands();
+        } catch (RuntimeException ignored) {
+            // The command buffer was not recording (it already ended or never began); nothing to abandon.
+        }
+    }
+
+    private void fail(Throwable failure, long[] generations) {
+        failedGenerations = generations;
+        LOGGER.error("[JBP-LOD] V4 LOD rendering disabled until the scope, resources or target provider change.",
+                failure);
+    }
+
+    /** Defers destruction behind a queue-marker fence; nothing waits. */
+    private void releaseResources(String reason) {
+        Resources previous = resources;
+        resources = null;
+        state.invalidate();
+        if (previous != null) {
+            GpuRetireQueue.retire(GpuCompletion.submitMarker(previous.game), previous);
+            LOGGER.info("[JBP-LOD] V4 renderer released: {}", reason);
+        }
+    }
+
+    private void release(String reason) {
+        if (resources != null) {
+            try {
+                releaseResources(reason);
+            } catch (RuntimeException | Error failure) {
+                LOGGER.error("[JBP-LOD] V4 renderer release failed.", failure);
+                resources = null;
+            }
+        }
+        reportedInvalid.clear();
+    }
+
+    private void releaseNow(String reason) {
+        Resources previous = resources;
+        resources = null;
+        state.invalidate();
+        if (previous == null) {
+            return;
+        }
+        try {
+            vkDeviceWaitIdle(previous.game.device());
+            previous.close();
+            LOGGER.info("[JBP-LOD] V4 renderer released: {}", reason);
+        } catch (RuntimeException | Error failure) {
+            LOGGER.error("[JBP-LOD] V4 renderer shutdown release failed.", failure);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    /** One recorded LOD frame, valid until {@link #drawCutout} returns. */
+    public static final class Frame {
+        private final LodFrameContext context;
+        private final LodFrameBuffers slot;
+        private final Resources resources;
+        private final LodDrawPlan plan;
+
+        private Frame(LodFrameContext context, LodFrameBuffers slot, Resources resources, LodDrawPlan plan) {
+            this.context = context;
+            this.slot = slot;
+            this.resources = resources;
+            this.plan = plan;
+        }
+    }
+
+    /** Compute pre-pass graphics hooks for one frame. */
+    private static final class FrameHooks implements LodComputeExecutor.Hooks {
+        private final Resources res;
+        private final LodRuntime runtime;
+        private final long gameDepthView;
+        private final LodDepthConversion gameDepth;
+        private final LodDepthConversion lodDepth;
+
+        FrameHooks(Resources res, LodRuntime runtime, long gameDepthView, LodDepthConversion gameDepth,
+                   LodDepthConversion lodDepth) {
+            this.res = res;
+            this.runtime = runtime;
+            this.gameDepthView = gameDepthView;
+            this.gameDepth = gameDepth;
+            this.lodDepth = lodDepth;
+        }
+
+        @Override
+        public LodComputeExecutor.HiZInputs beforeTraversal(VkCommandBuffer commandBuffer, LodFrameBuffers slot) {
+            res.convertPass.record(commandBuffer, slot.slotIndex(), gameDepthView, gameDepth, lodDepth,
+                    res.depthTarget);
+            if (!res.hiz.record(commandBuffer, slot.slotIndex(), res.depthTarget.view(), VK_IMAGE_LAYOUT_GENERAL,
+                    res.depthTarget.width(), res.depthTarget.height())) {
+                throw new IllegalStateException("HiZ build was not recorded for a non-empty extent");
+            }
+            return new LodComputeExecutor.HiZInputs(res.hiz.sampledView(), res.hiz.sampler(),
+                    res.hiz.sampledLayout(), res.hiz.packedSize());
+        }
+
+        @Override
+        public void drawCullVisibility(VkCommandBuffer commandBuffer, LodFrameBuffers slot) {
+            res.cullPass.record(commandBuffer, slot, res.depthTarget, runtime.nodeBuffers().sectionMetadata(),
+                    runtime.executor().visibility());
+        }
+    }
+
+    /** Device/target-specific resources; closed only after every submission that used them retires. */
+    private static final class Resources implements AutoCloseable {
+        final GameVulkan.Snapshot game;
+        final VulkanLodPipeline drawPipeline;
+        final LodIndexBuffer indexBuffer;
+        final LodDepthTarget depthTarget;
+        final HizPyramid hiz;
+        final LodDepthConvertPass convertPass;
+        final LodCullRasterPass cullPass;
+        final GpuBuffer[] fog;
+        final long atlasSampler;
+        final long lightmapSampler;
+        final long depthSampler;
+        private final boolean[] requestsPending;
+        private final boolean[] cleanerPending;
+        boolean drawLogged;
+        private boolean closed;
+
+        private Resources(GameVulkan.Snapshot game, VulkanLodPipeline drawPipeline, LodIndexBuffer indexBuffer,
+                          LodDepthTarget depthTarget, HizPyramid hiz, LodDepthConvertPass convertPass,
+                          LodCullRasterPass cullPass, GpuBuffer[] fog, long atlasSampler, long lightmapSampler,
+                          long depthSampler, int frameSlots) {
+            this.game = game;
+            this.drawPipeline = drawPipeline;
+            this.indexBuffer = indexBuffer;
+            this.depthTarget = depthTarget;
+            this.hiz = hiz;
+            this.convertPass = convertPass;
+            this.cullPass = cullPass;
+            this.fog = fog;
+            this.atlasSampler = atlasSampler;
+            this.lightmapSampler = lightmapSampler;
+            this.depthSampler = depthSampler;
+            this.requestsPending = new boolean[frameSlots];
+            this.cleanerPending = new boolean[frameSlots];
+        }
+
+        static Resources create(GameVulkan.Snapshot game, DeviceCaps caps, LodRenderState.ResourceKey key,
+                                int frameSlots) {
+            List<AutoCloseable> created = new ArrayList<>();
+            try {
+                ShaderCompiler compiler = new ShaderCompiler();
+                Map<String, String> vertexDefines = new HashMap<>();
+                if (caps.shaderInt64()) {
+                    vertexDefines.put("USE_SHADER_INT64", "1");
+                }
+                ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/quads3.vert", Map.copyOf(vertexDefines));
+                ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.of());
+                VulkanLodPipeline draw = track(created, VulkanLodPipeline.create(game, vertex, fragment,
+                        VulkanLodPipeline.State.of(key.colorFormat(), key.depthFormat(), true, false,
+                                key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
+                                VulkanLodPipeline.BlendMode.OPAQUE), frameSlots));
+                LodIndexBuffer index = track(created, LodIndexBuffer.create(game));
+                LodDepthTarget target = track(created, LodDepthTarget.create(game, key.width(), key.height()));
+                HizPyramid hizPyramid = track(created, new HizPyramid(game, compiler, frameSlots,
+                        caps.subgroupHizReductionSupported(), key.reverseZ()));
+                hizPyramid.prepare(key.width(), key.height());
+                long depthSampler = LodSamplers.depth(game.device());
+                created.add(() -> org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), depthSampler, null));
+                LodDepthConvertPass convert = track(created,
+                        new LodDepthConvertPass(game, compiler, frameSlots, depthSampler));
+                LodCullRasterPass cull = track(created,
+                        new LodCullRasterPass(game, compiler, frameSlots, key.reverseZ(), index.handle()));
+                GpuBuffer[] fogBuffers = new GpuBuffer[frameSlots];
+                for (int i = 0; i < frameSlots; i++) {
+                    fogBuffers[i] = track(created, GpuBuffer.allocate(game, LodFogUniform.BYTE_SIZE,
+                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true));
+                }
+                long atlasSampler = LodSamplers.atlas(game.device(), ModelAtlasLayout.MAX_MIP_LOD);
+                created.add(() -> org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), atlasSampler, null));
+                long lightmapSampler = LodSamplers.lightmap(game.device());
+                created.add(() -> org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), lightmapSampler, null));
+                return new Resources(game, draw, index, target, hizPyramid, convert, cull, fogBuffers,
+                        atlasSampler, lightmapSampler, depthSampler, frameSlots);
+            } catch (RuntimeException | Error failure) {
+                // Nothing has been submitted yet, so immediate destruction in reverse order is safe.
+                for (int i = created.size() - 1; i >= 0; i--) {
+                    try {
+                        created.get(i).close();
+                    } catch (Exception closeFailure) {
+                        failure.addSuppressed(closeFailure);
+                    }
+                }
+                throw failure;
+            }
+        }
+
+        private static <T extends AutoCloseable> T track(List<AutoCloseable> created, T resource) {
+            created.add(resource);
+            return resource;
+        }
+
+        /**
+         * A slot returned by beginFrame has retired, so its host-visible traversal request queue and
+         * cleaner output from its previous use are final: forward them to the node worker.
+         */
+        void consumeRetiredSlot(LodRuntime runtime, LodFrameBuffers slot) {
+            int index = slot.slotIndex();
+            if (requestsPending[index]) {
+                requestsPending[index] = false;
+                runtime.onTraversalRequests(slot.requestQueue().mappedBytes());
+            }
+            if (cleanerPending[index]) {
+                cleanerPending[index] = false;
+                runtime.onCleanerOutput(runtime.executor().cleanerOutput(index).mappedBytes());
+            }
+        }
+
+        void markSlotSubmitted(int slotIndex, boolean cleanerRan) {
+            requestsPending[slotIndex] = true;
+            cleanerPending[slotIndex] = cleanerRan;
+        }
+
+        /** Writes every reflected set-0 binding of the draw pipeline for this slot. */
+        void writeDrawDescriptors(LodFrameBuffers slot, LodNodeGpuBuffers nodes, ModelResources models,
+                                  LodFrameTargets targets, LodDepthConversion gameDepth) {
+            int index = slot.slotIndex();
+            Set<Integer> written = new HashSet<>();
+            GpuBuffer scene = slot.sceneUniform();
+            bindBuffer(index, 0, scene.handle(), scene.capacity(), written);
+            bindBuffer(index, 1, nodes.geometry().handle(), nodes.geometry().capacity(), written);
+            drawPipeline.writeCombinedImageSampler(index, 2, atlasSampler, models.atlasView(), models.atlasLayout());
+            written.add(2);
+            bindBuffer(index, 3, models.models().handle(), models.modelBytes(), written);
+            bindBuffer(index, 4, models.colours().handle(), models.colourBytes(), written);
+            bindBuffer(index, 5, slot.positionScratch().handle(), slot.positionScratch().capacity(), written);
+            if (drawPipeline.hasBinding(LIGHTMAP_BINDING)) {
+                GpuTextureView lightmap = Minecraft.getInstance().gameRenderer.levelLightmap();
+                if (!(lightmap instanceof VulkanGpuTextureView vulkanLightmap)) {
+                    throw new IllegalStateException("[JBP-LOD] the level lightmap is not a Vulkan texture view");
+                }
+                // RenderPearl keeps sampled textures in GENERAL (V1 bridge evidence); validate in the smoke run.
+                drawPipeline.writeCombinedImageSampler(index, LIGHTMAP_BINDING, lightmapSampler,
+                        vulkanLightmap.vkImageView(), VK_IMAGE_LAYOUT_GENERAL);
+                written.add(LIGHTMAP_BINDING);
+            }
+            GpuBuffer fogBuffer = fog[index];
+            LodFogUniform.write(fogBuffer.mappedBytes(), 0, targets.matrices().modelView(), targets.fog(), gameDepth);
+            fogBuffer.flush(0, LodFogUniform.BYTE_SIZE);
+            bindBuffer(index, FOG_BINDING, fogBuffer.handle(), LodFogUniform.BYTE_SIZE, written);
+            Set<Integer> missing = drawPipeline.bindingNumbers();
+            missing.removeAll(written);
+            if (!missing.isEmpty()) {
+                throw new IllegalStateException("[JBP-LOD] LOD draw shader reflects unwritten descriptor bindings "
+                        + missing);
+            }
+        }
+
+        private void bindBuffer(int slot, int binding, long buffer, long range, Set<Integer> written) {
+            if (drawPipeline.hasBinding(binding)) {
+                drawPipeline.writeBuffer(slot, binding, buffer, 0, range);
+                written.add(binding);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), lightmapSampler, null);
+            org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), atlasSampler, null);
+            for (GpuBuffer buffer : fog) {
+                buffer.close();
+            }
+            cullPass.close();
+            convertPass.close();
+            org.lwjgl.vulkan.VK10.vkDestroySampler(game.device(), depthSampler, null);
+            hiz.close();
+            depthTarget.close();
+            indexBuffer.close();
+            drawPipeline.close();
+        }
+    }
+}

@@ -1,0 +1,20 @@
+JBP-LOD source record
+
+V0 is an independent implementation of the scope, node-path, and exclusive-lock contracts documented in docs/todo/jbp-lod.md and mods/docs/voxy-vulkan-core-design.md. No upstream Voxy source files or implementation blocks were copied into this project. The sealed mods/voxy tree and MCRcortex/voxy were consulted only as read-only behavioral references.
+
+V2 Vulkan shader ports in `src/main/resources/assets/jbp-lod/shaders/` derive their algorithms from MCRcortex/voxy 263:
+- `lod/{block_model.glsl,frustum.glsl,lighting.glsl,pos_util.glsl,quad_format.glsl,quad_util.glsl,section.glsl}`
+- `lod/hierarchical/{node.glsl,queue.glsl,screenspace.glsl,traversal_dev.comp,cleaner/batch_visibility_set.comp,cleaner/result_transformer.comp,cleaner/sort_visibility.comp}`
+- `lod/gl46/{bindings.glsl,prep.comp,cmdgen.comp,buildtranslucents.comp,quads3.vert,quads.frag,cull/raster.vert,cull/raster.frag}`
+- `hiz/hiz.comp`, `hiz/blit.vert` from upstream `hiz/blit.vsh`, and `hiz/blit.frag` from upstream `hiz/blit.fsh`
+- `util/{depthutils.glsl,memcpy.comp,scatter.comp,prefixsum/inital3.comp,prefixsum/simple.comp}`
+
+Ports replace GL binding/location assumptions with Vulkan descriptor sets, push constants, and Vulkan built-ins. `hiz.comp` retains the clustered subgroup fast path and adds a shared-memory fallback; `lod/gl46/fog.glsl` is a JBP-LOD Vulkan-specific addition. Upstream Voxy headers were absent from these shader resources; each port carries a source-path comment, and this record identifies the corresponding upstream paths.
+
+The `cn.cubegarden.cosmos.jbp.client.lod.model` implementation derives bakery semantics from sealed upstream paths recorded in `mods/docs/jbp-lod-evidence/V4-model-contract.md`: `ModelFactory.java`, `ModelStore.java`, `ModelQueries.java`, `ModelBakerySubsystem.java`, `ColourDepthTextureData.java`, `IdNotYetComputedException.java`, `TextureUtils.java`, `MipGen.java`, `bakery/SoftwareModelTextureBakery.java`, `bakery/ReuseVertexConsumer.java`, `bakery/SoftwareRasterizer.java`, `block_model.glsl`, and `lod/gl46/quads.frag`. The port replaces the upstream GL/software raster and upload path with a Vulkan baker on the borrowed game device. The referenced upstream files have no file-level license/header block to copy. `mods/voxy` remains sealed and read-only.
+
+The Vulkan indexed-indirect raster pipeline and shared UINT16 quad-index pattern in `vk/render/VulkanLodPipeline.java` and `vk/render/LodIndexBuffer.java` derive their rendering semantics and index ordering from sealed MCRcortex/voxy 263 `section/backend/mdic/MDICSectionRenderer.java` and `rendering/util/SharedIndexBuffer.java`. These are Vulkan implementations and do not copy or invoke the sealed OpenGL renderer; the upstream All Rights Reserved license continues to apply to derived material.
+
+The V3 CPU/GPU data-layout and reference implementations in `cn.cubegarden.cosmos.jbp.client.lod.data` and `compute/SectionPreparationReference.java` / `compute/PrefixSumReference.java` derive the described byte/bit layouts and pass semantics from sealed MCRcortex/voxy 263 paths `assets/voxy/shaders/lod/section.glsl`, `quad_format.glsl`, `gl46/bindings.glsl`, `gl46/prep.comp`, `gl46/cmdgen.comp`, `gl46/buildtranslucents.comp`, `util/prefixsum/simple.comp`, and `client/core/rendering/section/backend/mdic/MDICSectionRenderer.java` / `client/core/rendering/util/SharedIndexBuffer.java`. The V3 RocksDB adapter derives backend semantics from `common/config/storage/StorageBackend.java`, `RocksDBStorageBackend.java`, `IMappingStorage.java`, and `IStoredSectionPositionIterator.java`. These are independently written Vulkan/Java implementations; sealed source remains read-only. Android RocksDB compatibility is not asserted; see `mods/docs/jbp-lod-evidence/V3-storage-decision.md`.
+
+The upstream repository's license is All Rights Reserved; this record does not grant rights to redistribute upstream material.

@@ -1,0 +1,52 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/util/prefixsum/simple.comp
+#define WORK_SIZE 256
+
+// Initial parallel prefix sum over batches of WORK_SIZE entries.
+layout(local_size_x = WORK_SIZE) in;
+
+layout(set = 0, binding = IO_BUFFER, std430) buffer InputBuffer {
+    uvec4[] ioCount;
+};
+
+shared uint prefixSum[256];
+
+#define STEP(i) if ((I & (1u << i)) != 0u) prefixSum[I] += prefixSum[(I & ~((1u << (i + 1)) - 1u)) + ((1u << i) - 1u)];
+uint prefixSumExclusive(uint value) {
+    uint I = gl_LocalInvocationID.x;
+    prefixSum[I] = value;
+    barrier();
+    STEP(0)
+    barrier();
+    STEP(1)
+    barrier();
+    STEP(2)
+    barrier();
+    STEP(3)
+    barrier();
+    STEP(4)
+    barrier();
+    STEP(5)
+    barrier();
+    STEP(6)
+    barrier();
+    STEP(7)
+    barrier();
+    return prefixSum[I] - value;
+}
+
+void main() {
+    uint gid = gl_LocalInvocationID.x;
+    prefixSum[gid] = 0u;
+    uvec4 count = uvec4(0u);
+    uint sum = 0u;
+    {
+        uvec4 dat = ioCount[gid];
+        count.yzw = dat.xyz;
+        count.z += count.y;
+        count.w += count.z;
+        sum = count.w + dat.w;
+    }
+    barrier();
+    count += prefixSumExclusive(sum);
+    ioCount[gid] = count;
+}

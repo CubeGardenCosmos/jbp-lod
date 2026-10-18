@@ -1,0 +1,88 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/lod/hierarchical/cleaner/sort_visibility.comp
+#define OPS_PER_THREAD (OUTPUT_SIZE / WORK_SIZE)
+layout(local_size_x = WORK_SIZE, local_size_y = 1) in;
+
+#import <jbp-lod:lod/hierarchical/node.glsl>
+
+layout(set = 0, binding = VISIBILITY_BUFFER_BINDING, std430) restrict readonly buffer VisibilityDataBuffer {
+    uint visibility[];
+};
+layout(set = 0, binding = OUTPUT_BUFFER_BINDING, std430) restrict volatile buffer MinimumVisibilityBuffer {
+    uint minVisIds[OUTPUT_SIZE];
+};
+
+uint atomicDerefMaxExchangeGlobal(uint atId, uint id) {
+    uint value = visibility[id];
+    while (true) {
+        uint existingId = minVisIds[atId];
+        if (existingId == id) return uint(-1);
+        if (visibility[existingId & ((1u << 31) - 1)] <= value) return id;
+        uint previous = atomicCompSwap(minVisIds[atId], existingId, id);
+        if (previous == existingId) return existingId;
+    }
+}
+
+void bubbleSortGlobal(uint start, uint id) {
+    for (uint i = start; i < OUTPUT_SIZE; ++i) {
+        id = atomicDerefMaxExchangeGlobal(i, id);
+        if (id == uint(-1)) break;
+    }
+}
+
+shared uint initalSort[OUTPUT_SIZE];
+
+uint atomicDerefMaxExchangeLocal(uint atId, uint id) {
+    uint value = visibility[id];
+    while (true) {
+        uint existingId = initalSort[atId];
+        if (existingId == id) return uint(-1);
+        if (visibility[existingId & ((1u << 31) - 1)] <= value) return id;
+        uint previous = atomicCompSwap(initalSort[atId], existingId, id);
+        if (previous == existingId) return existingId;
+    }
+}
+
+void bubbleSortInital(uint visibilityValue, uint id) {
+    uint start = 0;
+    if (visibility[initalSort[(OUTPUT_SIZE - 1) >> 1]] <= visibilityValue) start = (OUTPUT_SIZE - 1) >> 1;
+    for (uint i = start; i < OUTPUT_SIZE; ++i) id = atomicDerefMaxExchangeLocal(i, id);
+}
+
+bool shouldSortId(uint id) {
+    UnpackedNode node;
+    if (unpackNode(node, id) == uvec4(-1)) return false;
+    if (isEmptyMesh(node) || !hasMesh(node)) return false;
+    if (node.lodLevel == 4) return false;
+    if (hasRequested(node)) return false;
+    return true;
+}
+
+void main() {
+    for (uint i = 0; i < OPS_PER_THREAD; ++i) {
+        uint id = gl_LocalInvocationID.x * OPS_PER_THREAD + i;
+        initalSort[id] = minVisIds[id] | (1u << 31);
+    }
+    barrier();
+
+    for (uint i = 0; i < ELEMS_PER_THREAD; ++i) {
+        uint id = gl_GlobalInvocationID.x * ELEMS_PER_THREAD + i;
+        uint visibilityValue = visibility[id];
+        if (visibilityValue == uint(-1)) continue;
+        if (visibility[minVisIds[OUTPUT_SIZE - 1]] <= visibilityValue) continue;
+        if (!shouldSortId(id)) continue;
+        bubbleSortInital(visibilityValue, id);
+    }
+    barrier();
+
+    for (uint i = 0; i < OPS_PER_THREAD; ++i) {
+        barrier();
+        uint id = gl_LocalInvocationID.x * OPS_PER_THREAD + i;
+        uint sortedId = initalSort[id];
+        if ((sortedId & (1u << 31)) != 0) continue;
+        uint visibilityValue = visibility[sortedId];
+        if (visibility[minVisIds[OUTPUT_SIZE - 1]] <= visibilityValue) continue;
+        uint start = id;
+        if (visibility[minVisIds[(id + OUTPUT_SIZE) >> 1]] <= visibilityValue) start = (id + OUTPUT_SIZE) >> 1;
+        bubbleSortGlobal(start, sortedId);
+    }
+}

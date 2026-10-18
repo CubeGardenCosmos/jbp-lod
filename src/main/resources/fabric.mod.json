@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "jbp-lod",
+  "version": "${version}",
+  "name": "JBP-LOD",
+  "description": "Vulkan-first long-distance terrain mod for JubaopenCraft.",
+  "authors": ["JubaopenCraft"],
+  "license": "All-Rights-Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "cn.cubegarden.cosmos.jbp.client.lod.JbpLodClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "fabric-api": ">=0.162.0",
+    "minecraft": "=26.3",
+    "java": ">=25",
+    "sodium": "=${sodium_mod_version}"
+  },
+  "mixins": [
+    {
+      "config": "jbp-lod.vk.mixins.json",
+      "environment": "client"
+    }
+  ]
+}

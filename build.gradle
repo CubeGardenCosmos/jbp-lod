@@ -1,0 +1,84 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+    mavenCentral()
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
+}
+
+def lwjglOs = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+def lwjglArch = System.getProperty('os.arch').toLowerCase(Locale.ROOT)
+def lwjglNatives = lwjglOs.contains('win') ? (lwjglArch.contains('aarch64') ? 'windows-arm64' : 'windows')
+        : lwjglOs.contains('mac') ? (lwjglArch.contains('aarch64') ? 'macos-arm64' : 'macos')
+        : lwjglArch.contains('aarch64') ? 'linux-arm64' : 'linux'
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    implementation "maven.modrinth:sodium:${project.sodium_artifact_version}"
+    compileOnly "org.lwjgl:lwjgl-vulkan:${project.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-shaderc:${project.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-spvc:${project.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-vma:${project.lwjgl_version}"
+    include implementation("org.rocksdb:rocksdbjni:10.2.1")
+
+    testImplementation platform('org.junit:junit-bom:5.14.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "org.lwjgl:lwjgl-shaderc:${project.lwjgl_version}"
+    testImplementation "org.lwjgl:lwjgl-spvc:${project.lwjgl_version}"
+    testRuntimeOnly "org.lwjgl:lwjgl:${project.lwjgl_version}:natives-${lwjglNatives}"
+    testRuntimeOnly "org.lwjgl:lwjgl-shaderc:${project.lwjgl_version}:natives-${lwjglNatives}"
+    testRuntimeOnly "org.lwjgl:lwjgl-spvc:${project.lwjgl_version}:natives-${lwjglNatives}"
+}
+
+def targetJavaVersion = project.java_version.toInteger()
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = targetJavaVersion
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    inputs.properties 'version': project.version, 'sodium_mod_version': project.sodium_mod_version
+    filesMatching('fabric.mod.json') {
+        expand version: project.version, sodium_mod_version: project.sodium_mod_version
+    }
+}
+
+tasks.named('jar') {
+    from('NOTICE')
+}
+
+tasks.register('lodJar') {
+    group = 'build'
+    description = 'Builds the JBP-LOD Fabric mod JAR.'
+    dependsOn tasks.named('jar')
+}

@@ -1,0 +1,26 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/lod/hierarchical/cleaner/result_transformer.comp
+layout(local_size_x = OUTPUT_SIZE) in;
+layout(set = 0, binding = MIN_ID_BUFFER_BINDING, std430) restrict readonly buffer VisibilityDataBuffer {
+    uint minVisIds[OUTPUT_SIZE];
+};
+layout(set = 0, binding = NODE_BUFFER_BINDING, std430) restrict readonly buffer NodeData {
+    uvec4 nodes[];
+};
+layout(set = 0, binding = OUTPUT_BUFFER_BINDING, std430) restrict writeonly buffer OutputBuffer {
+    uvec2 outputBuffer[OUTPUT_SIZE];
+};
+layout(set = 0, binding = VISIBILITY_BUFFER_BINDING, std430) restrict buffer VisibilityBuffer {
+    uint visibility[];
+};
+layout(push_constant) uniform ResultTransformPushConstants {
+    uint visibilityCounter;
+};
+
+void main() {
+    uint id = minVisIds[gl_LocalInvocationID.x];
+    uvec4 node = nodes[id];
+    uvec2 result = node.xy;
+    if (all(equal(node, uvec4(-1)))) result = uvec2(-1);
+    outputBuffer[gl_LocalInvocationID.x] = result;
+    visibility[id] = visibilityCounter + 60;
+}

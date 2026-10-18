@@ -1,0 +1,19 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/lod/hierarchical/cleaner/batch_visibility_set.comp
+layout(local_size_x = 128) in;
+layout(set = 0, binding = VISIBILITY_BUFFER_BINDING, std430) restrict writeonly buffer VisibilityDataBuffer {
+    uint visibility[];
+};
+layout(set = 0, binding = LIST_BUFFER_BINDING, std430) restrict readonly buffer SetListBuffer {
+    uint ids[];
+};
+layout(push_constant) uniform VisibilitySetPushConstants {
+    uint count;
+    uint setTo;
+};
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (count <= id) return;
+    uint position = ids[id];
+    visibility[position & ((1u << 31) - 1)] = mix(setTo, uint(-1), (position & (1u << 31)) == 0);
+}

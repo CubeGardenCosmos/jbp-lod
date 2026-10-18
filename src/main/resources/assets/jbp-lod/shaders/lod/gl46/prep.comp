@@ -1,0 +1,23 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/lod/gl46/prep.comp
+layout(local_size_x=1) in;
+
+#define DRAW_COUNT_BUFFER_BINDING 1
+#define INDIRECT_SECTION_LOOKUP_BINDING 2
+
+#import <jbp-lod:lod/gl46/bindings.glsl>
+
+void main() {
+    cmdGenDispatchX = ((sectionCount+127u)/128u);
+    cmdGenDispatchY = 1u;
+    cmdGenDispatchZ = 1u;
+
+    opaqueDrawCount = 0u;
+    translucentDrawCount = 0u;
+    temporalOpaqueDrawCount = 0u;
+
+    cullDrawIndirectCommand.count = 6u*2u*3u;
+    cullDrawIndirectCommand.instanceCount = sectionCount;
+    cullDrawIndirectCommand.firstIndex = (1u<<16)*6u*2u;
+    cullDrawIndirectCommand.baseVertex = 0;
+    cullDrawIndirectCommand.baseInstance = 0u;
+}

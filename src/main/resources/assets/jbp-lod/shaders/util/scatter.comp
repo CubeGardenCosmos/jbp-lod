@@ -1,0 +1,40 @@
+// Derived from MCRcortex/voxy 263: assets/voxy/shaders/util/scatter.comp
+layout(local_size_x = 128) in;
+
+// Each chunk is four destination indices followed by four uvec4 values.
+layout(set = 0, binding = INPUT_BUFFER_BINDING, std430) restrict readonly buffer InputBuffer {
+    uvec4[] inData;
+};
+
+layout(set = 0, binding = OUTPUT_BUFFER1_BINDING, std430) restrict writeonly buffer OutputBuffer1 {
+    uvec4[] output1;
+};
+
+layout(set = 0, binding = OUTPUT_BUFFER2_BINDING, std430) restrict writeonly buffer OutputBuffer2 {
+    uvec4[] output2;
+};
+
+layout(push_constant) uniform ScatterParams {
+    uint count;
+} pc;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (pc.count <= id) {
+        return;
+    }
+    uint chunkBase = (id >> 2u) * 5u;
+    uint innerId = id & 3u;
+
+    uint writeLocation = inData[chunkBase][innerId];
+    uvec4 writeData = inData[chunkBase + 1u + innerId];
+
+    uint writeBuffer = writeLocation >> 31u;
+    writeLocation &= (1u << 31u) - 1u;
+
+    if (writeBuffer == 0u) {
+        output1[writeLocation] = writeData;
+    } else {
+        output2[writeLocation] = writeData;
+    }
+}
