@@ -512,7 +512,7 @@ public final class VulkanLodRenderer {
                     vertexDefines.put("USE_SHADER_INT64", "1");
                 }
                 ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/quads3.vert", Map.copyOf(vertexDefines));
-                ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.of());
+                ShaderCompiler.CompiledShader fragment = compiler.compile("lod/gl46/quads.frag", Map.of("BLOCK_MODEL_TEXTURE_BINDING", "2"));
                 VulkanLodPipeline draw = track(created, VulkanLodPipeline.create(game, vertex, fragment,
                         VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
                                 key.reverseZ() ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
@@ -524,7 +524,7 @@ public final class VulkanLodRenderer {
                 ShaderCompiler.CompiledShader translucentVertex = compiler.compile("lod/gl46/quads3.vert",
                         Map.copyOf(vertexDefines));
                 ShaderCompiler.CompiledShader translucentFragment = compiler.compile("lod/gl46/quads.frag",
-                        Map.of("TRANSLUCENT", "1"));
+                        Map.of("BLOCK_MODEL_TEXTURE_BINDING", "2", "TRANSLUCENT", "1"));
                 VulkanLodPipeline translucent = track(created, VulkanLodPipeline.create(game,
                         translucentVertex, translucentFragment,
                         VulkanLodPipeline.State.of(offscreen.colorFormat(), LodDepthTarget.FORMAT, true, true,
