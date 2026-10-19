@@ -5,9 +5,9 @@ JBP-LOD 是 Minecraft 26.3 + Fabric 的客户端远景 LOD 模组，Java 根包�
 `VkDevice`（不创建第二个 device，不提供 OpenGL 回退）。
 
 本仓库于 2026-10-19 从平台单仓库（`/home/klp/Minecraft-Server-Launcher`）的
-`mods/jbp-lod` 拆分而来，保留了该目录的完整提交历史。仓库目前仅存在于本机；远程地址待用户创建
-（TBD，未配置 remote）。平台侧决策记录见单仓库
-`docs/decisions/0038-lod-repo-split-and-dh-baseline.md`。
+`mods/jbp-lod` 拆分而来，保留了该目录的完整提交历史；远程仓库为
+<https://github.com/CubeGardenCosmos/jbp-lod>。平台侧决策记录见单仓库
+[ADR 0038](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/decisions/0038-lod-repo-split-and-dh-baseline.md)。
 
 ## 参考基线（已决定，2026-10-19）
 
@@ -31,9 +31,13 @@ JBP-LOD 是 Minecraft 26.3 + Fabric 的客户端远景 LOD 模组，Java 根包�
   许可证与逐项对比。
 - `docs/jbp-lod-evidence/`：V0–V4 的实现边界、存储决策、契约与验收证据。
 - `docs/voxy-26.3-render-decision.md`：封存 Voxy 的 26.3 渲染后端历史调查。
+- `docs/voxy-vulkan-core-design.md`：JBP-LOD Vulkan 渲染核心设计（历史设计记录）。
+- `docs/voxy-runtime-wsl-llvmpipe.md`、`docs/voxy-windows-smoke.md`：封存 Voxy 的历史运行与验收记录。
+- `docs/ysm-voxy-todo.md`：YSM 移植与旧 Voxy 计划的封存历史记录。
 
-这些文档从平台单仓库复制而来，正文中的部分相对链接仍指向单仓库的 `mods/docs/`、`docs/`
-路径（本仓库没有这些文件），因此可能无法直接打开；证据内容保持原样。
+这些文档从平台单仓库复制而来，正文保持原样。跨仓库引用指向 JubaopenCraft 单仓库的当前文档；
+旧 Voxy 源码链接指向上游 `MCRcortex/voxy` 的固定提交。单仓库中的 `mods/voxy` 与 `mods/jbp-lod`
+已于 2026-10-19 移除，本仓库是该模组及其 LOD 文档的维护位置。
 
 ## 构建
 

@@ -1,12 +1,14 @@
 # JBP-LOD V0–V6：Vulkan LOD 实施与验收计划
 
+> **2026-10-19 仓库与基线变更：** JBP-LOD 已拆分到独立仓库 [`CubeGardenCosmos/jbp-lod`](https://github.com/CubeGardenCosmos/jbp-lod)（保留 `mods/jbp-lod` 历史）。LOD 的行为/架构参考基线暂时以 Distant Horizons 实现为准；仓库拆分、基线边界、Android 原生库自建与未决项见 [ADR 0038](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/decisions/0038-lod-repo-split-and-dh-baseline.md)。本文既有“以 Voxy 为长期 fork 方向”等表述**不覆盖** ADR 0038：是否移植 DH 代码、PC 是否采用 DH 发行包、是否保留 JBP-LOD 渲染器均尚未决定。单仓库中的 `mods/jbp-lod`、`mods/voxy` 与 LOD 文档副本已于 2026-10-19 移除；跨仓库链接指向 JubaopenCraft 仓库的当前文档。
+
 日期：2026-10-18。V0 scope 与开发单人扩展代码、纯 Java 单元测试及当前 source/config 的 Gradle build 已完成。初始 Vulkan-only WSL2 llvmpipe client load 已记录；后续 dev-scope client 尝试未取得 scope lock，修正 world-folder normalization 后未再次启动游戏（pending: game smoke deferred by user）。V1 bridge 代码已就绪但硬件/validation 阶段门禁未通过；V2–V4 为部分源码实现/验收未完成，V5–V6 仍为 **TODO**。Main 最终 Java 25 `compileJava test lodJar` 为 BUILD SUCCESSFUL（10s），报告 112 项全套测试通过，见 [build output](artifact://167)。证据不代表真实 Windows/Linux Vulkan 硬件验收或任何 LOD 渲染验收。
 
-- 决策：[ADR 0036：全平台仅使用 Vulkan 游戏图形后端](../decisions/0036-vulkan-only-graphics-backend.md)（含 2026-10-18 决策历程补充）。
-- 设计：[JBP-LOD Vulkan 渲染核心设计](../../mods/docs/voxy-vulkan-core-design.md)。
-- 兼容性：[Minecraft 26.3 / Fabric](../compatibility/minecraft-26.3.md)、[平台支持矩阵](../architecture/platform-support.md)。
-- 历史参考：[旧 Voxy V0–V4 TODO（已封存，不等同于本文阶段）](../../mods/docs/ysm-voxy-todo.md)、[旧 Voxy Vulkan 核心研究](../../mods/docs/voxy-vulkan-core-design.md)。`mods/voxy` 只读封存，供研究参考。
-- Distant Horizons 参考：LGPL-3.0，仅本地只读 clone 到 `/home/klp/DH-reference`，未复制进本仓库；数据可用性/重叠/column 对比与建议见 [DH-reference.md](../../mods/docs/jbp-lod-evidence/DH-reference.md)。
+- 决策：[ADR 0036：全平台仅使用 Vulkan 游戏图形后端](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/decisions/0036-vulkan-only-graphics-backend.md)（含 2026-10-18 决策历程补充）。
+- 设计：[JBP-LOD Vulkan 渲染核心设计](voxy-vulkan-core-design.md)。
+- 兼容性：[Minecraft 26.3 / Fabric](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/compatibility/minecraft-26.3.md)、[平台支持矩阵](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/architecture/platform-support.md)。
+- 历史参考：[旧 Voxy V0–V4 TODO（已封存，不等同于本文阶段）](ysm-voxy-todo.md)、[旧 Voxy Vulkan 核心研究](voxy-vulkan-core-design.md)。`mods/voxy` 只读封存，供研究参考。
+- Distant Horizons 参考：LGPL-3.0，仅本地只读 clone 到 `/home/klp/DH-reference`，未复制进本仓库；数据可用性/重叠/column 对比与建议见 [DH-reference.md](jbp-lod-evidence/DH-reference.md)。
 
 **状态与边界：** JBP-LOD 是独立新模组，已在 `mods/jbp-lod` 建立，Java 根包为 `cn.cubegarden.cosmos.jbp.client.lod`；V0 scope/storage 基础完成，compute/HiZ/node-tree/runtime 与 opaque renderer 已有源码接线，但 live section ingest/mesher 缺失，非零输出与 GPU 渲染未验收。Release/launcher builds 保持多玩家 server-only scope，单人 inactive；开发环境可按 `-Djbp.lod.devScope` 显式启用本地单人 scope。PC client manifest 不再含 Voxy；launcher 已使用 JVM property `-Djbp.lod.dir` 并将桌面缓存根设为 `<data_dir>/cache/lod`。旧 `mods/voxy` 自身仍保留封存的旧系统属性 `jbp.voxy.dir`，该属性不是 JBP-LOD alias 或兼容入口。可选 manifest 字段的规范名称为 `lod_map_cache`；不接受历史字段名作为 alias。
 
@@ -16,7 +18,7 @@
 
 ## V0 封存旧模组并建立 JBP-LOD 骨架（DONE：代码/build/tests；dev-scope smoke deferred）
 
-- **先决条件**：Vulkan-only 与路线 B 已决定（[ADR 0036](../decisions/0036-vulkan-only-graphics-backend.md)）；本计划、设计与新模组边界完成文档对齐；Fabric/Minecraft 26.3 + Java 25 工具链可用。
+- **先决条件**：Vulkan-only 与路线 B 已决定（[ADR 0036](https://github.com/CubeGardenCosmos/JubaopenCraft/blob/main/docs/decisions/0036-vulkan-only-graphics-backend.md)）；本计划、设计与新模组边界完成文档对齐；Fabric/Minecraft 26.3 + Java 25 工具链可用。
 - **工作项**：
   - [x] 将 `mods/voxy` 封存为只读参考；不在旧目录继续实现、修复或改名。旧代码里的 `jbp.voxy.dir` 仅保留作历史，不属于 JBP-LOD 契约。
   - [x] 创建 `mods/jbp-lod` 的独立 Gradle/Fabric 模组与 `cn.cubegarden.cosmos.jbp.client.lod` Java 根包；不实现或加载 renderer。
@@ -28,7 +30,7 @@
   - [x] 使用 Fabric `JOIN`/`DISCONNECT`/`CLIENT_STOPPING` hooks 启停 scope；活动 session 在断连和客户端停止时关闭并释放锁。
 - **交付物**：可独立构建的 JBP-LOD Gradle/Fabric 模组、README 与 NOTICE/source record、scope/property/path/lock/logging 模块及纯 Java 单元测试。
 - **验收结果**：最终 `compileJava test lodJar` 成功，10 项纯 Java 测试通过。初始 Vulkan-only 客户端在 WSL2 llvmpipe 上加载并进入 singleplayer；带 devScope 的尝试进入世界但报告 dev ID 无效、未取锁。world-folder `LevelResource.ROOT` normalization 已修正并通过编译/测试，受用户指示未再次启动游戏验证。真实 Windows/Linux Vulkan 硬件及 dev-scope lock log 仍待验收；无 LOD renderer 声明。
-- **证据**：[V0 build、测试与客户端记录](../../mods/docs/jbp-lod-evidence/V0.md)。dev-scope 运行证据为 **pending: game smoke deferred by user**；初始 WSL Vulkan smoke 使用 llvmpipe，D3D12 Vulkan device 缺少 `VK_KHR_push_descriptor`。
+- **证据**：[V0 build、测试与客户端记录](jbp-lod-evidence/V0.md)。dev-scope 运行证据为 **pending: game smoke deferred by user**；初始 WSL Vulkan smoke 使用 llvmpipe，D3D12 Vulkan device 缺少 `VK_KHR_push_descriptor`。
 
 ## V1 Vulkan bridge spike 与阶段门禁（DOING；代码就绪，待 Vulkan 实机验证）
 
@@ -37,7 +39,7 @@
   - [x] 实现 `RenderSystem.getDevice()` → `FrontendGpuDevice.backend` → `VulkanDevice` 的 fail-fast `GameVulkan` 快照，读取 game `VkInstance`/`VkPhysicalDevice`/`VkDevice`、graphics/compute/transfer queues 与 family、VMA、启用 feature/extension；不创建第二个 device。
   - [x] 实现 `FrontendRenderPass`/`VulkanRenderPass` 与 `DefaultChunkRenderer` CUTOUT hook；取得本 pass `VkCommandBuffer`、color/depth `VkImageView`/`VkImage`/format/extent、矩阵和 render area，并逐 pass 借用、不跨帧持有 view。当前锁定 RenderPearl backend 使用 `GENERAL` layout、单采样（1）；layout/sample 不是公开 getter，依赖该版本的 backend rendering 信息。
   - [x] 添加 opt-in `-Djbp.lod.vkProbe=true` 排序 probe：独立 primary command buffer 在 CUTOUT graphics command buffer 提交前向现有 graphics queue 提交 TOP_OF_PIPE timestamp；当前 CUTOUT scope 内记录 BOTTOM_OF_PIPE timestamp、debug label 和 8×8 magenta `vkCmdClearAttachments` marker。日志记录了提交先后、scope 状态与 marker；这是 bridge spike，不是 LOD compute 或 LOD draw 实现。
-  - [x] 固定并记录 accessor、RenderPearl/Sodium 版本、同队列 ownership 与借用资源生命周期；WSL llvmpipe 的实际目标/log 见 [V1 证据与实机步骤](../../mods/docs/jbp-lod-evidence/V1.md)。
+  - [x] 固定并记录 accessor、RenderPearl/Sodium 版本、同队列 ownership 与借用资源生命周期；WSL llvmpipe 的实际目标/log 见 [V1 证据与实机步骤](jbp-lod-evidence/V1.md)。
   - [ ] 补齐硬件 Vulkan + validation 实机验证和 timestamp query 结果；当前 WSL run 的三个 query slots 仍 in-flight，退出前没有读到 timestamp 值。后续整合 game smoke：**pending: game smoke deferred by user**；等待 Main 在渲染部分完成后安排，不再由此 slice 启动客户端。
 - **交付物**：可编译的 bridge/accessor/probe 原型、同 graphics queue 双 command buffer 契约、WSL Vulkan 软件设备实际 CUTOUT 日志和 Windows/Linux 实机运行步骤。当前无 shader/LOD compute pipeline 或 LOD draw。
 - **阶段门禁**：WSL2 实际启动 Vulkan llvmpipe 并在 CUTOUT 取得设备与目标、记录 magenta clear marker；但设备是软件 Vulkan，`VK_LAYER_KHRONOS_validation` 不可用，且本次 timestamp 查询结果未完成。故 V1 **未通过**；不得开始 V2–V6 renderer 实现。
@@ -61,21 +63,21 @@
 ## V3 核心数据、存储接入与 Vulkan compute（DOING；部分资源/CPU API 已写，阶段未完成）
 
 
-**当前实现边界：** 已有 VMA buffer/barrier/frame-slot retirement、section ABI/reference、`LodComputeExecutor` pass graph、HiZ pyramid、异步 node/tree 与 GPU delta upload、RocksDB session，以及 `JbpLodClient` → `LodSession`/`LodRuntime` 接线。新增真实 `SectionMesher` 已安装，迁移上游 voxel face-generation/scanline merging，并处理邻居剔除及异步 model publication；Fabric chunk/light/biome/dirty-section hooks 采集 immutable snapshots，worker 进行 voxelization、16³→8³→4³→2³→1³ hierarchy 更新、storage writes 和 node/邻居通知。已补 fixed-input mesher/hierarchy tests，本 slice 未执行；此前 baseline `compileJava test lodJar` 的 112 项通过不代表新增代码已验证。GPU correctness、resize/retirement validation 与 live ingest game smoke 均未验证，没有 acceptance 条件勾选。Evidence: [V3 implementation boundary](../../mods/docs/jbp-lod-evidence/V3.md), [storage decision](../../mods/docs/jbp-lod-evidence/V3-storage-decision.md), [V3 resource/API contract](../../mods/docs/jbp-lod-evidence/V3-contract.md).
+**当前实现边界：** 已有 VMA buffer/barrier/frame-slot retirement、section ABI/reference、`LodComputeExecutor` pass graph、HiZ pyramid、异步 node/tree 与 GPU delta upload、RocksDB session，以及 `JbpLodClient` → `LodSession`/`LodRuntime` 接线。新增真实 `SectionMesher` 已安装，迁移上游 voxel face-generation/scanline merging，并处理邻居剔除及异步 model publication；Fabric chunk/light/biome/dirty-section hooks 采集 immutable snapshots，worker 进行 voxelization、16³→8³→4³→2³→1³ hierarchy 更新、storage writes 和 node/邻居通知。已补 fixed-input mesher/hierarchy tests，本 slice 未执行；此前 baseline `compileJava test lodJar` 的 112 项通过不代表新增代码已验证。GPU correctness、resize/retirement validation 与 live ingest game smoke 均未验证，没有 acceptance 条件勾选。Evidence: [V3 implementation boundary](jbp-lod-evidence/V3.md), [storage decision](jbp-lod-evidence/V3-storage-decision.md), [V3 resource/API contract](jbp-lod-evidence/V3-contract.md).
 - **先决条件**：V1 bridge gate、V2 shader/toolchain 与 capability baseline 通过；V0 scope API 固定。
 - **工作项**：
   - [ ] 建立基于游戏同一 device 的 Vulkan buffer/resource 层与 VMA allocator 接入；实现 SSBO、indirect buffer、staging、生命周期/resize 管理及精确 compute→compute/vertex/indirect barriers。
   - [ ] 实现 section ingest 与 CPU/GPU buffer layout；保留旧算法语义与对应数据格式，不通过 CPU 同步读回或改写为 mesh shader 绕开原算法。
   - [ ] 忠实迁移 LOD mesh-generation compute：hierarchical traversal、可见性/队列、section preparation、prefix sum、translucent build 与 indirect command generation；按 scope 重建/关闭存储会话。
-  - [ ] **部分完成/待验证**：桌面默认选择上游 RocksDB JNI 10.2.1 并记录本地 jar/repository evidence；Android ABI/bionic/16 KiB、目标端加载及存储 I/O 均 **待验证**。见 [V3 storage decision](../../mods/docs/jbp-lod-evidence/V3-storage-decision.md).
+  - [ ] **部分完成/待验证**：桌面默认选择上游 RocksDB JNI 10.2.1 并记录本地 jar/repository evidence；Android ABI/bionic/16 KiB、目标端加载及存储 I/O 均 **待验证**。见 [V3 storage decision](jbp-lod-evidence/V3-storage-decision.md).
 - **交付物**：已提供资源/layout/reference、compute/HiZ executor、node/tree 与 scope/storage/runtime 接线、桌面 RocksDB 记录及 live section producer/mesher source 和 fixed-input tests；非零 GPU correctness 与 acceptance evidence 尚未交付。
 - **验收条件**：所有条件保持未验收；新增 section producer/mesher 的 integrated build/test/packaging 由 Main 统一执行并记录。GPU/game smoke **pending: game smoke deferred by user**。不得把 CPU references、pipeline wrapper 或 command-recording 日志当作非零 GPU 输出证据。
 
 ## V4 Vulkan LOD 绘制与 Sodium 合成（DOING；opaque renderer/model binding present, production terrain and GPU acceptance pending）
 
-**2026-10-19 llvmpipe dev-scope smoke（不等于验收）：** 通过 dev-only `DevScript` 在软件 Vulkan 上完成 RD8 四点采集循环、返回、RD2 越 150 格 teleport 及 LOD on/off 截图；teleport 后 traversal 继续请求（`pendingRequests=428`），LOD 在 RD2 距相机超过 32 格处可见（on/off 差异 45.4% 像素，LOD 区域纯黑 0.94%、暗色 5.0%，连续帧差异 <0.1%，无 jbp-lod ERROR）。期间修复 reverse-Z quad shader 未定义导致 bounding gate 反转，并加入 source-side near-range exclusion（vanilla RD + 16 格 overlap margin，`cmdgen.comp`/`SceneUniform`，含纯逻辑测试）。仍存在黑色水面四边形与 vanilla/LOD 边界白色闪烁环，详见 [V4.md](../../mods/docs/jbp-lod-evidence/V4.md)。llvmpipe 不能替代 V1/V4 实机门禁，下列验收框保持未勾选。
+**2026-10-19 llvmpipe dev-scope smoke（不等于验收）：** 通过 dev-only `DevScript` 在软件 Vulkan 上完成 RD8 四点采集循环、返回、RD2 越 150 格 teleport 及 LOD on/off 截图；teleport 后 traversal 继续请求（`pendingRequests=428`），LOD 在 RD2 距相机超过 32 格处可见（on/off 差异 45.4% 像素，LOD 区域纯黑 0.94%、暗色 5.0%，连续帧差异 <0.1%，无 jbp-lod ERROR）。期间修复 reverse-Z quad shader 未定义导致 bounding gate 反转，并加入 source-side near-range exclusion（vanilla RD + 16 格 overlap margin，`cmdgen.comp`/`SceneUniform`，含纯逻辑测试）。仍存在黑色水面四边形与 vanilla/LOD 边界白色闪烁环，详见 [V4.md](jbp-lod-evidence/V4.md)。llvmpipe 不能替代 V1/V4 实机门禁，下列验收框保持未勾选。
 
-**当前实现边界：** `VulkanLodRenderer` 已接 active runtime、model provider/descriptors、depth conversion/HiZ/cull/compute pre-pass 与 CUTOUT opaque indexed indirect draw，提供 indirect-count/multi-draw/single-command fallback；mixin 与 vanilla external-target provider 已接线，target validation、资源 key/state/lifecycle 代码存在。V3 live section ingest/mesher 仍缺失，非零 terrain output 未建立；translucent/temporal command regions 尚无 renderer draw consumer，CUTOUT hook 还受 Sodium `shouldDraw` 条件限制。Main 最终 build/test/packaging 已通过（112 项测试；[output](artifact://167)），但源码接线不等于实际绘制或同步正确；所有视觉、GPU、validation 与游戏运行结果均为 **pending: game smoke deferred by user**。详见 [V4 evidence](../../mods/docs/jbp-lod-evidence/V4.md)；不勾选验收。
+**当前实现边界：** `VulkanLodRenderer` 已接 active runtime、model provider/descriptors、depth conversion/HiZ/cull/compute pre-pass 与 CUTOUT opaque indexed indirect draw，提供 indirect-count/multi-draw/single-command fallback；mixin 与 vanilla external-target provider 已接线，target validation、资源 key/state/lifecycle 代码存在。V3 live section ingest/mesher 仍缺失，非零 terrain output 未建立；translucent/temporal command regions 尚无 renderer draw consumer，CUTOUT hook 还受 Sodium `shouldDraw` 条件限制。Main 最终 build/test/packaging 已通过（112 项测试；[output](artifact://167)），但源码接线不等于实际绘制或同步正确；所有视觉、GPU、validation 与游戏运行结果均为 **pending: game smoke deferred by user**。详见 [V4 evidence](jbp-lod-evidence/V4.md)；不勾选验收。
 - **先决条件**：V3 compute 数据与 buffer contract 通过；V1 已冻结当前帧 Sodium targets 与 command recording 边界。
 - **工作项**：
   - [ ] 实现 Vulkan indexed indirect draw（含设备支持的 indirect-count 路径）、显式 depth/stencil/blend pipeline state 与 descriptor。
