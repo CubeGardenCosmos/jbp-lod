@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.LongToIntFunction;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -141,5 +142,100 @@ class VoxelHierarchyWriterTest {
         assertEquals(voxel(4, 15), level0[1 | (2 << 5) | (3 << 10)], "chunk (0,0,0) octant");
         assertEquals(voxel(5, 15), level0[(16 + 5) | (6 << 5) | (7 << 10)], "chunk (1,0,0) octant");
         assertArrayEquals(StoredVoxelSection.encode(level0), store.sections.get(SectionPos.pack(0, 0, 0, 0)));
+    }
+
+    /**
+     * Regression for the shared-writer refactor: the pre-refactor {@code LiveSectionProducer.writeHierarchy}
+     * inserted each level with the chunk section's own coordinates ({@code sectionX/Y/Z}), while the key used
+     * the progressively shifted coordinates. Passing the shifted coordinates to {@link VoxelHierarchy#insert}
+     * moved every level above 0 into the wrong octant and corrupted the mips. Compare both the stored payloads
+     * and the exact notification sequence against that old implementation for several chunks that share
+     * stored sections at every level, including a repeated write of the same section.
+     */
+    @Test void matchesPreRefactorLiveSectionProducerForMultiChunkMultiLevelInput() {
+        LongToIntFunction opacity = word -> IdMapper.getLightId(word) & 15;
+        MemoryStore actualStore = new MemoryStore();
+        List<Update> actualUpdates = new ArrayList<>();
+        var writer = new VoxelHierarchyWriter(actualStore,
+                (position, types, children) -> actualUpdates.add(new Update(position, types, children)), opacity);
+        MemoryStore expectedStore = new MemoryStore();
+        List<Update> expectedUpdates = new ArrayList<>();
+
+        // (0,0,0) and (1,0,0) merge into the same level-0..4 parents; the remaining chunks are spread over
+        // positive and negative coordinates so every level observes other octants. (0,0,0) is written twice:
+        // the second write must be a no-op, exactly like the old producer's unchanged-level fast path.
+        int[][] chunks = {
+                {0, 0, 0}, {1, 0, 0}, {0, 0, 1}, {1, 0, 1},
+                {-1, 0, -1}, {2, 1, 3}, {5, -2, 7}, {8, 3, -5},
+                {0, 0, 0},
+        };
+        // The final chunk repeats the first chunk's coordinates and payload, so its second write must take
+        // the unchanged-level fast path (no store put, no notifications), exactly like the old producer.
+        int[] seeds = {0, 1, 2, 3, 4, 5, 6, 7, 0};
+        for (int i = 0; i < chunks.length; i++) {
+            int x = chunks[i][0], y = chunks[i][1], z = chunks[i][2];
+            long[] source = patternedSource(seeds[i]);
+            writer.write(x, y, z, source);
+            referenceWrite(expectedStore, expectedUpdates, x, y, z, source, opacity);
+        }
+
+        assertEquals(expectedUpdates, actualUpdates);
+        assertEquals(expectedStore.sections.keySet(), actualStore.sections.keySet());
+        for (long key : expectedStore.sections.keySet()) {
+            assertArrayEquals(expectedStore.sections.get(key), actualStore.sections.get(key),
+                    "stored payload " + SectionPos.pretty(key));
+        }
+    }
+
+    /** Source with a deterministic mix of air, blocks and light so downsampling choices are non-trivial. */
+    private static long[] patternedSource(int seed) {
+        long[] words = new long[4096];
+        for (int i = 0; i < words.length; i++) {
+            int block = (i * 31 + seed * 17) % 7 == 0 ? 0 : 1 + ((i + seed) % 5);
+            int light = (i + seed * 3) & 15;
+            words[i] = voxel(block, light);
+        }
+        return words;
+    }
+
+    /**
+     * Verbatim behaviour of {@code LiveSectionProducer.writeHierarchy} at d807e529 (before the shared
+     * {@link VoxelHierarchyWriter} extraction), used as the oracle for the regression test.
+     */
+    private static void referenceWrite(MemoryStore store, List<Update> updates,
+                                       int chunkSectionX, int chunkSectionY, int chunkSectionZ,
+                                       long[] source, LongToIntFunction opacity) {
+        int x = chunkSectionX, y = chunkSectionY, z = chunkSectionZ;
+        int sectionX = chunkSectionX, sectionY = chunkSectionY, sectionZ = chunkSectionZ;
+        for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
+            long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
+            byte[] stored = store.get(key);
+            long[] target = stored == null ? new long[StoredVoxelSection.VOXELS]
+                    : StoredVoxelSection.decode(stored);
+            long[] before = stored == null ? null : target.clone();
+            VoxelHierarchy.insert(target, source, level, sectionX, sectionY, sectionZ);
+            if (before == null || !Arrays.equals(before, target)) {
+                store.put(key, StoredVoxelSection.encode(target));
+                byte children = VoxelHierarchy.children(target);
+                if (level == 0 && children != 0) children = (byte) 0xFF;
+                updates.add(new Update(key, SectionPos.DEFAULT_UPDATE_FLAGS, children));
+                int sx = x >> 1, sy = y >> 1, sz = z >> 1;
+                for (int axis = 0; axis < 3; axis++) {
+                    for (int sign = -1; sign <= 1; sign += 2) {
+                        long adjacent = SectionPos.pack(level,
+                                sx + (axis == 0 ? sign : 0),
+                                sy + (axis == 1 ? sign : 0),
+                                sz + (axis == 2 ? sign : 0));
+                        updates.add(new Update(adjacent, SectionPos.UPDATE_TYPE_BLOCK_BIT, (byte) 0));
+                    }
+                }
+            }
+            if (level < SectionPos.MAX_LOD_LAYER) {
+                source = VoxelHierarchy.downsample(source, 16 >> level, opacity);
+            }
+            x >>= 1;
+            y >>= 1;
+            z >>= 1;
+        }
     }
 }

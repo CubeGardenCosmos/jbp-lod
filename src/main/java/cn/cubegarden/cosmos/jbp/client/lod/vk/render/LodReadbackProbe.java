@@ -34,9 +34,16 @@ import org.slf4j.LoggerFactory;
 final class LodReadbackProbe {
     static final String PROPERTY = "jbp.lod.debugReadback";
     static final int WARMUP_FRAMES = 120;
-    static final int SAMPLE_INTERVAL_FRAMES = 120;
-    /** Eight samples: four consecutive pairs, so pass-count oscillation between adjacent frames is visible. */
-    static final int MAX_SAMPLES = 8;
+    /** Fast phase: the first four frame pairs, 120 frames apart, for early pass-count oscillation. */
+    static final int FAST_SAMPLE_INTERVAL_FRAMES = 120;
+    static final int FAST_SAMPLE_COUNT = 8;
+    /**
+     * Long phase: one frame pair every 1800 frames (~30 s at 60 fps) so samples taken after the world
+     * import has produced distant sections are logged too, not just the first few seconds.
+     */
+    static final int SAMPLE_INTERVAL_FRAMES = 1800;
+    /** Four fast pairs plus sixteen long-cadence pairs; covers roughly the first eight minutes at 60 fps. */
+    static final int MAX_SAMPLES = 40;
     static final int COMMAND_BYTES = 20;
     static final int CONTROL_BYTES = 44;
     static final int HALF_RGBA_PIXEL_BYTES = 8;
@@ -48,6 +55,7 @@ final class LodReadbackProbe {
     private int framesSeen;
     private int samplesTaken;
     private int pendingConsecutive;
+    private int nextSampleFrame = WARMUP_FRAMES;
 
     LodReadbackProbe() {
         this(Boolean.getBoolean(PROPERTY));
@@ -58,29 +66,36 @@ final class LodReadbackProbe {
     }
 
     /**
-     * Counts one prepared frame; returns true at the first frame at or after warmup, at that frame's
-     * successor, and again every {@link #SAMPLE_INTERVAL_FRAMES} after the pair, at most
-     * {@link #MAX_SAMPLES} times when enabled. Each sample therefore captures two consecutive frames so
-     * per-frame pass-count oscillation is visible in the log instead of only across 120-frame gaps.
+     * Counts one prepared frame and returns true when that frame must be sampled, at most
+     * {@link #MAX_SAMPLES} times when enabled. Each sample captures two consecutive frames so
+     * per-frame pass-count oscillation is visible in the log instead of only across sample gaps.
+     *
+     * <p>The first {@link #FAST_SAMPLE_COUNT} samples (four pairs) are spaced
+     * {@link #FAST_SAMPLE_INTERVAL_FRAMES} frames apart starting at {@link #WARMUP_FRAMES}; after that
+     * one pair is taken every {@link #SAMPLE_INTERVAL_FRAMES} frames for the rest of the session, so a
+     * sample taken after the world import has completed is captured too.
      */
     boolean tick() {
         if (!enabled || samplesTaken >= MAX_SAMPLES) {
             return false;
         }
         framesSeen++;
-        if (framesSeen < WARMUP_FRAMES) {
-            return false;
-        }
         if (pendingConsecutive > 0) {
             pendingConsecutive--;
             samplesTaken++;
+            if (samplesTaken == FAST_SAMPLE_COUNT && samplesTaken < MAX_SAMPLES) {
+                // The fast burst ended on this pair's second frame; start the long-cadence phase here.
+                nextSampleFrame = framesSeen + SAMPLE_INTERVAL_FRAMES;
+            }
             return true;
         }
-        if ((framesSeen - WARMUP_FRAMES) % SAMPLE_INTERVAL_FRAMES != 0) {
+        if (framesSeen < nextSampleFrame) {
             return false;
         }
         samplesTaken++;
         pendingConsecutive = 1;
+        nextSampleFrame = framesSeen + (samplesTaken < FAST_SAMPLE_COUNT
+                ? FAST_SAMPLE_INTERVAL_FRAMES : SAMPLE_INTERVAL_FRAMES);
         return true;
     }
 
@@ -149,11 +164,22 @@ final class LodReadbackProbe {
         return new VisibilityStats(visibleNow, previousFlagSet, temporalNext, other);
     }
 
-    /** Colour statistics of an RGBA16F image: per-channel min/max over finite values. */
-    record ColorStats(float[] min, float[] max, long nonzeroPixels, long pixels, long nonFinite) {
+    /**
+     * Colour statistics of an RGBA16F image: per-channel min/max over finite values, how many pixels
+     * have any non-zero channel, and how many carry non-zero alpha (drawn LOD coverage).
+     */
+    record ColorStats(float[] min, float[] max, long nonzeroPixels, long pixels, long nonFinite,
+                      long nonzeroAlpha) {
+        double alphaShare() {
+            return pixels == 0 ? 0.0 : (double) nonzeroAlpha / pixels;
+        }
+
         @Override public String toString() {
             return "min=" + Arrays.toString(min) + " max=" + Arrays.toString(max)
-                    + " nonzeroPixels=" + nonzeroPixels + "/" + pixels + " nonFinite=" + nonFinite;
+                    + " nonzeroPixels=" + nonzeroPixels + "/" + pixels
+                    + " nonzeroAlpha=" + nonzeroAlpha + " alphaShare="
+                    + String.format(java.util.Locale.ROOT, "%.4f", alphaShare())
+                    + " nonFinite=" + nonFinite;
         }
     }
 
@@ -163,6 +189,7 @@ final class LodReadbackProbe {
         float[] max = {Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
         long nonzero = 0;
         long nonFinite = 0;
+        long nonzeroAlpha = 0;
         for (int p = 0; p < pixels; p++) {
             int base = p * HALF_RGBA_PIXEL_BYTES;
             boolean any = false;
@@ -176,13 +203,16 @@ final class LodReadbackProbe {
                 max[c] = Math.max(max[c], v);
                 if (v != 0.0f) {
                     any = true;
+                    if (c == 3) {
+                        nonzeroAlpha++;
+                    }
                 }
             }
             if (any) {
                 nonzero++;
             }
         }
-        return new ColorStats(min, max, nonzero, pixels, nonFinite);
+        return new ColorStats(min, max, nonzero, pixels, nonFinite, nonzeroAlpha);
     }
 
     /** Stencil census of the seed: stencil 1 = sky (LOD may draw), stencil 0 = vanilla-masked. */

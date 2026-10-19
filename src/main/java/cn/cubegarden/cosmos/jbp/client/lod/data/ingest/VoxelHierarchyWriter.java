@@ -60,7 +60,9 @@ public final class VoxelHierarchyWriter {
             long[] target = stored == null ? new long[StoredVoxelSection.VOXELS]
                     : StoredVoxelSection.decode(stored);
             long[] before = stored == null ? null : target.clone();
-            VoxelHierarchy.insert(target, source, level, x, y, z);
+            // insert derives the octant from the section's own chunk coordinates (level bits), not the
+            // shifted key coordinates: passing x/y/z here would move every level > 0 octant and corrupt mips.
+            VoxelHierarchy.insert(target, source, level, chunkSectionX, chunkSectionY, chunkSectionZ);
             // Unchanged levels skip the write and every notification: no watched node can see different voxels.
             if (before == null || !Arrays.equals(before, target)) {
                 changed = true;

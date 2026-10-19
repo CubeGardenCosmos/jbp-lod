@@ -23,5 +23,7 @@ void main() {
     gl_FragDepth = clamp(screenDepth, 0.0, 1.0);
     // Geometry uses SRC_ALPHA / ONE_MINUS_SRC_ALPHA onto transparent black. Its stored
     // aggregate is premultiplied; recover straight alpha for the game's ALPHA pipeline.
+    // quads.frag resets opaque alpha (upstream's SSAO pass did this) and keeps translucent alpha,
+    // so opaque pixels reach here at alpha 1 (identity division) and alpha stays real coverage.
     color = vec4(accumulated.rgb / accumulated.a, accumulated.a);
 }

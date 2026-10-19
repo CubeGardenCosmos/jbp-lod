@@ -223,6 +223,28 @@ class ShaderCompilerCoverageTest {
         return json.append('}').toString();
     }
 
+    @Test
+    void opaqueQuadsResetPackedMetadataAlphaBeforeOutputButTranslucentDoesNot() throws IOException {
+        String path = "/assets/jbp-lod/shaders/lod/gl46/quads.frag";
+        String source;
+        try (InputStream input = ShaderCompilerCoverageTest.class.getResourceAsStream(path)) {
+            assertNotNull(input, "Missing shader resource " + path);
+            source = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        int compute = source.indexOf("colour = computeColour(texPos, colour);");
+        assertTrue(compute >= 0, "opaque colour computation must call computeColour");
+        int output = source.indexOf("outColour = applyLodFog(colour);", compute);
+        int reset = source.indexOf("colour.a = 1.0f;", compute);
+        assertTrue(reset > compute, "opaque alpha must be reset after computeColour consumed the packed metadata");
+        assertTrue(output > reset, "the alpha reset must precede the fragment output");
+        assertTrue(source.substring(compute, reset).contains("#ifndef TRANSLUCENT"),
+                "the packed-metadata reset must be opaque-only; translucent alpha is real coverage");
+        assertTrue(source.substring(reset, output).contains("#endif"),
+                "the opaque alpha reset must be inside the TRANSLUCENT guard");
+        assertFalse(source.substring(reset, output).contains("colour.a = 0"),
+                "opaque coverage must be 1, never a packed metadata byte");
+    }
+
     private static String quote(String value) {
         StringBuilder result = new StringBuilder(value.length() + 2).append('"');
         for (int i = 0; i < value.length(); i++) {

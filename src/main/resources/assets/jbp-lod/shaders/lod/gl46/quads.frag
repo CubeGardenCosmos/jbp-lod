@@ -195,6 +195,12 @@ void main() {
     outColour = vec4(1.0, 0.0, 1.0, 1.0);
     #else
     colour = computeColour(texPos, colour);
+    #ifndef TRANSLUCENT
+    // computeColour encoded face | level<<3 | AO<<6 into alpha; upstream clears it in its SSAO pass
+    // (voxy ssao.comp: ocolour.w = 1.0f). This port has no SSAO pass, so reset it here, after the
+    // only reader of the packed bytes, to the opaque coverage the offscreen composite expects.
+    colour.a = 1.0f;
+    #endif
     outColour = applyLodFog(colour);
     #endif
     #else

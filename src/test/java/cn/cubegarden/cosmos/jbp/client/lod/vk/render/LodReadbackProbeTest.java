@@ -22,17 +22,32 @@ class LodReadbackProbeTest {
     }
 
     @Test
-    void enabledProbeSamplesConsecutiveFramePairsAfterWarmup() {
+    void enabledProbeKeepsSamplingAtLongCadenceForTheWholeSession() {
         LodReadbackProbe probe = new LodReadbackProbe(true);
         java.util.List<Integer> fired = new java.util.ArrayList<>();
-        for (int i = 1; i <= LodReadbackProbe.WARMUP_FRAMES + 10 * LodReadbackProbe.SAMPLE_INTERVAL_FRAMES; i++) {
+        int lastFastPairFrame = LodReadbackProbe.WARMUP_FRAMES
+                + 3 * LodReadbackProbe.FAST_SAMPLE_INTERVAL_FRAMES + 1;
+        int lastPairFrame = lastFastPairFrame
+                + 16 * LodReadbackProbe.SAMPLE_INTERVAL_FRAMES;
+        for (int i = 1; i <= lastPairFrame + 1; i++) {
             if (probe.tick()) {
                 fired.add(i);
             }
         }
-        // Pairs of adjacent frames: pass-count oscillation between frame N and N+1 is visible per sample.
-        assertEquals(java.util.List.of(120, 121, 240, 241, 360, 361, 480, 481), fired);
+        // Four consecutive frame pairs 120 frames apart: pass-count oscillation between frame N and
+        // N+1 is visible per sample; then one pair every 1800 frames so post-import samples are logged.
+        java.util.List<Integer> expected = new java.util.ArrayList<>(java.util.List.of(
+                120, 121, 240, 241, 360, 361, 480, 481));
+        for (int pair = 0; pair < 16; pair++) {
+            int first = 481 + LodReadbackProbe.SAMPLE_INTERVAL_FRAMES
+                    + pair * LodReadbackProbe.SAMPLE_INTERVAL_FRAMES;
+            expected.add(first);
+            expected.add(first + 1);
+        }
+        assertEquals(expected, fired);
         assertEquals(LodReadbackProbe.MAX_SAMPLES, fired.size());
+        assertTrue(fired.get(fired.size() - 1) > 10000,
+                "the probe must still sample long after the world import finished");
     }
 
     @Test
@@ -80,6 +95,8 @@ class LodReadbackProbeTest {
         assertArrayEquals(new float[]{1.0f, 0.5f, 0.0f, 1.0f}, stats.max());
         assertEquals(2, stats.nonzeroPixels());
         assertEquals(3, stats.pixels());
+        assertEquals(1, stats.nonzeroAlpha());
+        assertEquals(1.0 / 3.0, stats.alphaShare(), 1e-12);
         assertEquals(0, stats.nonFinite());
     }
 
@@ -94,6 +111,7 @@ class LodReadbackProbeTest {
         assertEquals(0.5f, stats.min()[1]);
         assertEquals(0.5f, stats.max()[1]);
         assertEquals(1, stats.nonzeroPixels());
+        assertEquals(0, stats.nonzeroAlpha());
     }
 
     @Test
