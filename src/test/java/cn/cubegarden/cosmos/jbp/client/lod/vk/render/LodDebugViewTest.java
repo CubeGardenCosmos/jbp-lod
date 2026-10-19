@@ -26,6 +26,8 @@ class LodDebugViewTest {
         assertEquals(LodDebugView.PASS, LodDebugView.parse("PASS").orElseThrow());
         assertEquals(LodDebugView.BOUND, LodDebugView.parse("Bound").orElseThrow());
         assertEquals(LodDebugView.STENCIL, LodDebugView.parse("stencil").orElseThrow());
+        assertEquals(LodDebugView.LIGHT, LodDebugView.parse("light").orElseThrow());
+        assertEquals(LodDebugView.TEXTURE, LodDebugView.parse("Texture").orElseThrow());
     }
 
     @Test
@@ -36,7 +38,7 @@ class LodDebugViewTest {
 
     @Test
     void shaderCodesAreDistinctAndMatchGlslComments() {
-        // quads.frag documents codes 1..9; keep these in sync.
+        // quads.frag documents codes 1..11; keep these in sync.
         assertEquals(0, LodDebugView.OFF.shaderCode());
         assertEquals(1, LodDebugView.NORMAL.shaderCode());
         assertEquals(2, LodDebugView.UV.shaderCode());
@@ -47,6 +49,8 @@ class LodDebugViewTest {
         assertEquals(7, LodDebugView.PASS.shaderCode());
         assertEquals(8, LodDebugView.BOUND.shaderCode());
         assertEquals(9, LodDebugView.STENCIL.shaderCode());
+        assertEquals(10, LodDebugView.LIGHT.shaderCode());
+        assertEquals(11, LodDebugView.TEXTURE.shaderCode());
         assertEquals("jbp.lod.debugView", LodDebugView.PROPERTY);
     }
 }

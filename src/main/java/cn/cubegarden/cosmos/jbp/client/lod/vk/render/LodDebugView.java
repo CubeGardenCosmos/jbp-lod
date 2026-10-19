@@ -34,7 +34,11 @@ public enum LodDebugView {
      * Green marks surviving LOD fragments, not sampled stencil values. Fixed-function stencil rejects
      * cannot be shown by this shader; this is not a full-screen stencil attachment visualizer.
      */
-    STENCIL(9);
+    STENCIL(9),
+    /** Packed lightmap * face tint only (no texture): black here means the quad light is missing. */
+    LIGHT(10),
+    /** Raw atlas colour only (no lightmap, no fog): black here means the atlas tile sampling is wrong. */
+    TEXTURE(11);
 
     public static final String PROPERTY = "jbp.lod.debugView";
 

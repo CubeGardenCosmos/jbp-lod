@@ -378,7 +378,7 @@ public final class LodComputeExecutor implements AutoCloseable {
         float fy = LodComputeLayout.cameraSubSection(in.cameraY());
         float fz = LodComputeLayout.cameraSubSection(in.cameraZ());
         slot.writeSceneUniform(new LodSceneUniform(LodComputeLayout.translateMvp(in.mvp(), fx, fy, fz),
-                sx, sy, sz, frameId, fx, fy, fz));
+                sx, sy, sz, frameId, fx, fy, fz, in.nearExclusionRadius()));
         slot.writeTraversalSceneUniform(new TraversalSceneUniform(in.mvp(), sx, sy, sz, hiz.packedSize(),
                 fx, fy, fz,
                 LodComputeLayout.minimumScreenSpaceSize(in.subdivisionSize(), in.viewportWidth(), in.viewportHeight()),
@@ -758,7 +758,7 @@ public final class LodComputeExecutor implements AutoCloseable {
      */
     public record FrameInputs(long frameId, float[] mvp, double cameraX, double cameraY, double cameraZ,
                               int viewportWidth, int viewportHeight, float subdivisionSize,
-                              int renderDistanceSections, int requestQueueSize,
+                              int renderDistanceSections, int requestQueueSize, float nearExclusionRadius,
                               NodeInputs nodes, GpuBuffer sectionMetadata,
                               int[] visibilityOps, boolean runCleaner, int cleanerMaxNodeId, Hooks hooks) {
         public FrameInputs {
@@ -773,6 +773,9 @@ public final class LodComputeExecutor implements AutoCloseable {
             }
             if (viewportWidth <= 0 || viewportHeight <= 0 || !(subdivisionSize > 0)) {
                 throw new IllegalArgumentException("viewport and subdivision size must be positive");
+            }
+            if (!(nearExclusionRadius >= 0.0f) || !Float.isFinite(nearExclusionRadius)) {
+                throw new IllegalArgumentException("near exclusion radius must be finite and non-negative");
             }
             if (requestQueueSize < 0 || requestQueueSize > LodComputeLayout.MAX_REQUEST_QUEUE_SIZE) {
                 throw new IllegalArgumentException("requestQueueSize must be 0.." + LodComputeLayout.MAX_REQUEST_QUEUE_SIZE);

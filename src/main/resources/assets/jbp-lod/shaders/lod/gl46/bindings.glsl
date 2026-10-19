@@ -4,6 +4,9 @@ layout(set=0, binding=0, std140) uniform SceneUniform {
     ivec3 baseSectionPos;
     uint frameId;
     vec3 cameraSubPos;
+    // Near-range exclusion radius in blocks (vanilla render distance * 16 + margin).
+    // Stored in the std140 tail padding, so the uniform remains 96 bytes.
+    float exclusionRadius;
 };
 
 struct DrawCommand {

@@ -68,12 +68,19 @@ public final class LiveSectionProducer {
                         if (admission.isClosed()) return;//Accepted before close: skip the conversion and writes
                         long[] words = new long[4096];
                         IdMapper mapper = session.mapper();
+                        int skySum = 0;
+                        boolean skyAllZero = skyCopy != null;
                         for (int i = 0; i < words.length; i++) {
                             int vx = i & 15, vy = i >> 8, vz = (i >> 4) & 15;
-                            int illumination = (skyCopy == null ? 0 : Math.min(15, skyCopy.get(vx, vy, vz)))
+                            int skyLevel = skyCopy == null ? 0 : Math.min(15, skyCopy.get(vx, vy, vz));
+                            skySum += skyLevel;
+                            if (skyLevel != 0) skyAllZero = false;
+                            int illumination = skyLevel
                                     | ((blockCopy == null ? 0 : Math.min(15, blockCopy.get(vx, vy, vz))) << 4);
                             words[i] = mapper.getBaseId((byte) illumination, states[i], biomes[(vx >> 2) | (vz >> 2) << 2 | (vy >> 2) << 4]);
                         }
+                        session.stats().lightSection(skyCopy != null, blockCopy != null, skyAllZero,
+                                skyCopy != null && skySum == 4096 * 15);
                         writeHierarchy(x, y, z, words);
                         session.stats().sectionIngested();
                     } catch (RuntimeException failure) {

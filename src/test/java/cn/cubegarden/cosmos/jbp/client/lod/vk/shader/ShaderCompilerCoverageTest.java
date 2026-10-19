@@ -128,6 +128,7 @@ class ShaderCompilerCoverageTest {
                 "INPUT_BUFFER_BINDING", "0", "OUTPUT_BUFFER1_BINDING", "1", "OUTPUT_BUFFER2_BINDING", "2")));
 
         cases.add(new ShaderCase("lod/gl46/quads3.vert", Map.of()));
+        cases.add(new ShaderCase("lod/gl46/quads3.vert", Map.of("USE_REVERSE_Z", "1")));
         cases.add(new ShaderCase("lod/gl46/quads3.vert", Map.of("USE_SHADER_INT64", "1")));
         cases.add(new ShaderCase("lod/gl46/quads3.vert", Map.of("TAA_PATCH", "1"),
                 "\nvec2 taaShift() { return vec2(float(gl_VertexIndex & 1), 0.0) * 0.125; }\n"));
@@ -135,7 +136,13 @@ class ShaderCompilerCoverageTest {
         Map<String, String> fragmentDefines = Map.of("BLOCK_MODEL_TEXTURE_BINDING", "2");
         cases.add(new ShaderCase("lod/gl46/quads.frag", fragmentDefines));
         cases.add(new ShaderCase("lod/gl46/quads.frag",
+                withDefines(fragmentDefines, Map.of("USE_REVERSE_Z", "1"))));
+        cases.add(new ShaderCase("lod/gl46/quads.frag",
                 withDefines(fragmentDefines, Map.of("TRANSLUCENT", "1"))));
+        cases.add(new ShaderCase("lod/gl46/quads.frag",
+                withDefines(fragmentDefines, Map.of("LOD_DEBUG_VIEW", "10"))));
+        cases.add(new ShaderCase("lod/gl46/quads.frag",
+                withDefines(fragmentDefines, Map.of("LOD_DEBUG_VIEW", "11"))));
         Map<String, String> patchedDefines = withDefines(fragmentDefines, Map.of("PATCHED_SHADER", "1"));
         String fragmentCallback = "\nlayout(location=0) out vec4 injectedColour;\n"
                 + "void voxy_emitFragment(VoxyFragmentParameters parameters) { injectedColour = parameters.sampledColour; }\n";

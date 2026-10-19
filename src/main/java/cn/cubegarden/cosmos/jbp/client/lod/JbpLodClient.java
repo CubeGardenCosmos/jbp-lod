@@ -80,6 +80,7 @@ public final class JbpLodClient implements ClientModInitializer {
         VulkanLodRenderer.registerLifecycle();
         LiveChunkCapture.register();
         LodCommands.register();
+        DevScript.register();
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.level != sessionLevel) {
                 if (client.level == null) stopSession("world unloaded");

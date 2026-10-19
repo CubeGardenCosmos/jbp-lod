@@ -42,6 +42,8 @@ final class LodReadbackProbe {
      * import has produced distant sections are logged too, not just the first few seconds.
      */
     static final int SAMPLE_INTERVAL_FRAMES = 1800;
+    /** Dev override for the long cadence, e.g. {@code -Djbp.lod.debugReadbackIntervalFrames=150}. */
+    static final String INTERVAL_PROPERTY = "jbp.lod.debugReadbackIntervalFrames";
     /** Four fast pairs plus sixteen long-cadence pairs; covers roughly the first eight minutes at 60 fps. */
     static final int MAX_SAMPLES = 40;
     static final int COMMAND_BYTES = 20;
@@ -52,6 +54,7 @@ final class LodReadbackProbe {
     private static final Logger LOGGER = LoggerFactory.getLogger("jbp-lod-render");
 
     private final boolean enabled;
+    private final int sampleIntervalFrames;
     private int framesSeen;
     private int samplesTaken;
     private int pendingConsecutive;
@@ -63,6 +66,8 @@ final class LodReadbackProbe {
 
     LodReadbackProbe(boolean enabled) {
         this.enabled = enabled;
+        this.sampleIntervalFrames = Math.max(FAST_SAMPLE_INTERVAL_FRAMES,
+                Integer.getInteger(INTERVAL_PROPERTY, SAMPLE_INTERVAL_FRAMES));
     }
 
     /**
@@ -85,7 +90,7 @@ final class LodReadbackProbe {
             samplesTaken++;
             if (samplesTaken == FAST_SAMPLE_COUNT && samplesTaken < MAX_SAMPLES) {
                 // The fast burst ended on this pair's second frame; start the long-cadence phase here.
-                nextSampleFrame = framesSeen + SAMPLE_INTERVAL_FRAMES;
+                nextSampleFrame = framesSeen + sampleIntervalFrames;
             }
             return true;
         }
@@ -95,7 +100,7 @@ final class LodReadbackProbe {
         samplesTaken++;
         pendingConsecutive = 1;
         nextSampleFrame = framesSeen + (samplesTaken < FAST_SAMPLE_COUNT
-                ? FAST_SAMPLE_INTERVAL_FRAMES : SAMPLE_INTERVAL_FRAMES);
+                ? FAST_SAMPLE_INTERVAL_FRAMES : sampleIntervalFrames);
         return true;
     }
 

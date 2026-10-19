@@ -13,7 +13,7 @@ class LodSceneUniformTest {
         for (int i = 0; i < 16; i++) {
             mvp[i] = 0.5f * i;
         }
-        LodSceneUniform scene = new LodSceneUniform(mvp, -3, 4, 5, 77, 0.25f, 0.5f, 0.75f);
+        LodSceneUniform scene = new LodSceneUniform(mvp, -3, 4, 5, 77, 0.25f, 0.5f, 0.75f, 48.0f);
         ByteBuffer buffer = ByteBuffer.allocate(LodSceneUniform.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
 
         scene.writeTo(buffer, 0);
@@ -33,13 +33,24 @@ class LodSceneUniformTest {
         assertEquals(0.25f, buffer.getFloat(80), 0.0f);
         assertEquals(0.5f, buffer.getFloat(84), 0.0f);
         assertEquals(0.75f, buffer.getFloat(88), 0.0f);
+        assertEquals(92, LodSceneUniform.EXCLUSION_RADIUS_OFFSET);
+        assertEquals(48.0f, buffer.getFloat(92), 0.0f);
+    }
+
+    @Test
+    void exclusionRadiusIsClampedToTheFiniteTailPadding() {
+        LodSceneUniform scene = new LodSceneUniform(new float[16], 0, 0, 0, 0, 0f, 0f, 0f, -4.0f);
+        ByteBuffer buffer = ByteBuffer.allocate(LodSceneUniform.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        scene.writeTo(buffer, 0);
+        assertEquals(0.0f, buffer.getFloat(92), 0.0f);
+        assertEquals(96, LodSceneUniform.BYTE_SIZE);
     }
 
     @Test
     void rejectsMatrixOfWrongLengthAndBlockThatDoesNotFit() {
         assertThrows(IllegalArgumentException.class,
-                () -> new LodSceneUniform(new float[15], 0, 0, 0, 0, 0f, 0f, 0f));
-        LodSceneUniform scene = new LodSceneUniform(new float[16], 0, 0, 0, 0, 0f, 0f, 0f);
+                () -> new LodSceneUniform(new float[15], 0, 0, 0, 0, 0f, 0f, 0f, 0f));
+        LodSceneUniform scene = new LodSceneUniform(new float[16], 0, 0, 0, 0, 0f, 0f, 0f, 0f);
         assertThrows(IndexOutOfBoundsException.class,
                 () -> scene.writeTo(ByteBuffer.allocate(LodSceneUniform.BYTE_SIZE - 1), 0));
     }

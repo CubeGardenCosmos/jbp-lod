@@ -7,6 +7,7 @@ import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameContext;
 import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
 import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeExecutor;
 import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeLayout;
+import cn.cubegarden.cosmos.jbp.client.lod.data.LodNearExclusion;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelAtlasLayout;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelResources;
@@ -74,6 +75,8 @@ public final class VulkanLodRenderer {
     private static final VulkanLodRenderer INSTANCE = new VulkanLodRenderer();
     /** Process-wide once-only flag for the first recorded draw path log (render thread only). */
     private static boolean drawPathLogged;
+    /** Dev-script A/B toggle; release builds never set it. Volatile because the tick thread sets it. */
+    private static volatile boolean devDrawEnabled = true;
 
     private final LodRenderState state = new LodRenderState();
     private final Set<String> reportedInvalid = new HashSet<>();
@@ -99,7 +102,24 @@ public final class VulkanLodRenderer {
 
     /** Default on; {@code -Djbp.lod.render=false} disables the renderer (the V1 probe is independent). */
     public static boolean enabled() {
-        return !"false".equalsIgnoreCase(System.getProperty(RENDER_PROPERTY));
+        return devDrawEnabled && !"false".equalsIgnoreCase(System.getProperty(RENDER_PROPERTY));
+    }
+
+    /**
+     * Dev-script A/B toggle for acceptance screenshots: disables the whole LOD path, including the vanilla
+     * fog extension, without touching storage or the node session. Not exposed to players or release builds.
+     */
+    public static void setDevDrawEnabled(boolean enabled) {
+        devDrawEnabled = enabled;
+    }
+
+    /**
+     * Defines for {@code lod/gl46/quads.frag}. The bounding gate uses {@code DEPTH_SCALAR_COMPARE} from
+     * {@code depthutils.glsl}, whose default is standard Z; on a reverse-Z device the define MUST be
+     * present or {@code outsideBound} inverts and discards every far LOD fragment.
+     */
+    static Map<String, String> quadFragmentDefines(boolean reverseZ) {
+        return reverseZ ? Map.of("USE_REVERSE_Z", "1") : Map.of();
     }
 
     /** Registers scope/resource-reload invalidation listeners; idempotent. */
@@ -256,7 +276,10 @@ public final class VulkanLodRenderer {
                     LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(visibilityFrameId, mvp,
                             context.cameraX(), context.cameraY(), context.cameraZ(),
                             color.width(), color.height(), SUBDIVISION_SIZE, runtime.renderDistanceSections(),
-                            runtime.requestQueueSize(), runtime.nodeInputs(),
+                            runtime.requestQueueSize(),
+                            LodNearExclusion.radiusBlocks(
+                                    Minecraft.getInstance().options.getEffectiveRenderDistance()),
+                            runtime.nodeInputs(),
                             runtime.nodeBuffers().sectionMetadata(), runtime.takeVisibilityOps(), runCleaner,
                             runtime.cleanerMaxNodeId(), hooks);
                     res.bounding.record(commandBuffer, slot, mvp, context.cameraX(), context.cameraY(),
@@ -566,7 +589,7 @@ public final class VulkanLodRenderer {
                     vertexDefines.put("USE_SHADER_INT64", "1");
                 }
                 ShaderCompiler.CompiledShader vertex = compiler.compile("lod/gl46/quads3.vert", Map.copyOf(vertexDefines));
-                Map<String, String> fragmentDefines = new HashMap<>();
+                Map<String, String> fragmentDefines = new HashMap<>(quadFragmentDefines(key.reverseZ()));
                 fragmentDefines.put("BLOCK_MODEL_TEXTURE_BINDING", "2");
                 // Opt-in diagnostics: debugSolid paints magenta; debugView selects an attribute/coverage view.
                 // Both are off by default; see LodDebugView for names, colours and stencil limitations.
@@ -574,7 +597,7 @@ public final class VulkanLodRenderer {
                     fragmentDefines.put("DEBUG_SOLID", "1");
                 }
                 LodDebugView debugView = LodDebugView.parse(System.getProperty(LodDebugView.PROPERTY)).orElseGet(() -> {
-                    LOGGER.warn("[JBP-LOD] Unknown -D{} value '{}'; expected normal|uv|face|model|depth|level|pass|bound|stencil. Debug view disabled.",
+                    LOGGER.warn("[JBP-LOD] Unknown -D{} value '{}'; expected normal|uv|face|model|depth|level|pass|bound|stencil|light|texture. Debug view disabled.",
                             LodDebugView.PROPERTY, System.getProperty(LodDebugView.PROPERTY));
                     return LodDebugView.OFF;
                 });

@@ -10,6 +10,8 @@ public final class LodSceneUniform {
     public static final int BASE_SECTION_POSITION_OFFSET = 64;
     public static final int FRAME_ID_OFFSET = 76;
     public static final int CAMERA_SUB_POSITION_OFFSET = 80;
+    /** Uses the std140 tail padding after {@code vec3 cameraSubPos}; struct size stays 96 bytes. */
+    public static final int EXCLUSION_RADIUS_OFFSET = 92;
 
     private final float[] mvpColumnMajor;
     private final int baseSectionX;
@@ -19,10 +21,12 @@ public final class LodSceneUniform {
     private final float cameraSubX;
     private final float cameraSubY;
     private final float cameraSubZ;
+    private final float exclusionRadius;
 
     public LodSceneUniform(float[] mvpColumnMajor,
                            int baseSectionX, int baseSectionY, int baseSectionZ,
-                           int frameId, float cameraSubX, float cameraSubY, float cameraSubZ) {
+                           int frameId, float cameraSubX, float cameraSubY, float cameraSubZ,
+                           float exclusionRadius) {
         if (mvpColumnMajor.length != 16) {
             throw new IllegalArgumentException("MVP matrix must have sixteen column-major values");
         }
@@ -34,6 +38,7 @@ public final class LodSceneUniform {
         this.cameraSubX = cameraSubX;
         this.cameraSubY = cameraSubY;
         this.cameraSubZ = cameraSubZ;
+        this.exclusionRadius = Float.isFinite(exclusionRadius) ? Math.max(0.0f, exclusionRadius) : 0.0f;
     }
 
     public void writeTo(ByteBuffer target, int byteOffset) {
@@ -51,5 +56,6 @@ public final class LodSceneUniform {
         bytes.putFloat(byteOffset + CAMERA_SUB_POSITION_OFFSET, cameraSubX);
         bytes.putFloat(byteOffset + CAMERA_SUB_POSITION_OFFSET + 4, cameraSubY);
         bytes.putFloat(byteOffset + CAMERA_SUB_POSITION_OFFSET + 8, cameraSubZ);
+        bytes.putFloat(byteOffset + EXCLUSION_RADIUS_OFFSET, exclusionRadius);
     }
 }

@@ -15,6 +15,11 @@ public final class LodStats {
     private final AtomicLong sectionsMeshed = new AtomicLong();
     private final AtomicLong sectionsMeshedNonEmpty = new AtomicLong();
     private final AtomicLong totalQuads = new AtomicLong();
+    private final AtomicLong lightSections = new AtomicLong();
+    private final AtomicLong lightNoSkyLayer = new AtomicLong();
+    private final AtomicLong lightNoBlockLayer = new AtomicLong();
+    private final AtomicLong lightSkyZero = new AtomicLong();
+    private final AtomicLong lightSkyFull = new AtomicLong();
     private volatile int nodes;
     private volatile int metadataSlots;
     private volatile int pendingRequests;
@@ -28,6 +33,15 @@ public final class LodStats {
     private volatile long geometryCapacityBytes;
     private volatile String queueDepths = "";
     private volatile NodeDiagnostics nodeDiagnostics = NodeDiagnostics.EMPTY;
+
+    /** Per ingested section: whether the light layers were present and whether sky light was all-0/all-15. */
+    public void lightSection(boolean skyLayer, boolean blockLayer, boolean skyZero, boolean skyFull) {
+        lightSections.incrementAndGet();
+        if (!skyLayer) lightNoSkyLayer.incrementAndGet();
+        if (!blockLayer) lightNoBlockLayer.incrementAndGet();
+        if (skyLayer && skyZero) lightSkyZero.incrementAndGet();
+        if (skyLayer && skyFull) lightSkyFull.incrementAndGet();
+    }
 
     public void chunkCaptured() {
         chunksCaptured.incrementAndGet();
@@ -88,6 +102,9 @@ public final class LodStats {
                 + " meshed=" + sectionsMeshed.get()
                 + " meshedNonEmpty=" + sectionsMeshedNonEmpty.get()
                 + " quads=" + totalQuads.get()
+                + " light[sections=" + lightSections.get() + " noSkyLayer=" + lightNoSkyLayer.get()
+                + " noBlockLayer=" + lightNoBlockLayer.get() + " skyZero=" + lightSkyZero.get()
+                + " skyFull=" + lightSkyFull.get() + "]"
                 + " nodes=" + nodes
                 + " metadataSlots=" + metadataSlots
                 + " models published=" + modelsPublished + " pending=" + modelsPending

@@ -97,7 +97,7 @@ vec3 categorical(float t) {
     return 0.5 + 0.5 * cos(6.2831853 * (vec3(t) + vec3(0.0, 0.33, 0.67)));
 }
 
-vec3 lodDebugColour(bool outsideBound) {
+vec3 lodDebugColour(bool outsideBound, vec2 texPos) {
     if (LOD_DEBUG_VIEW == 1) {
         uint face = getFace();
         uint axis = face >> 1u;
@@ -135,6 +135,14 @@ vec3 lodDebugColour(bool outsideBound) {
         // NOT a stencil readback: only fragments surviving fixed-function stencil/depth can appear.
         // Rejected pixels retain the underlying scene; green does not reveal the stored stencil value.
         return vec3(0.0, 1.0, 0.0);
+    }
+    if (LOD_DEBUG_VIEW == 10) {
+        // Packed lightmap colour * directional face tint, before the atlas texture is applied.
+        return uint2vec4RGBA(interData.y).rgb;
+    }
+    if (LOD_DEBUG_VIEW == 11) {
+        // Raw atlas albedo, before lighting and fog.
+        return texture(blockModelAtlas, texPos).rgb;
     }
     return vec3(gl_FragCoord.z);
 }
@@ -190,7 +198,7 @@ void main() {
 
     #ifndef PATCHED_SHADER
     #if defined(LOD_DEBUG_VIEW)
-    outColour = vec4(lodDebugColour(outsideBound), 1.0);
+    outColour = vec4(lodDebugColour(outsideBound, texPos), 1.0);
     #elif defined(DEBUG_SOLID)
     outColour = vec4(1.0, 0.0, 1.0, 1.0);
     #else
