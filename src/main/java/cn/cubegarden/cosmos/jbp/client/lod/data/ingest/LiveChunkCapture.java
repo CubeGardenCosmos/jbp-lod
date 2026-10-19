@@ -44,7 +44,7 @@ public final class LiveChunkCapture {
             dirty.addAll(loaded.keySet());
         }
         // Bound synchronous capture per tick; expensive conversion/storage remains off-thread.
-        // A dirty chunk stays dirty until the producer has backlog room for all of its sections.
+        // A dirty chunk stays dirty until the light engine has data for it and the producer has backlog room.
         var iterator = dirty.iterator();
         int remaining = 2;
         while (remaining-- > 0 && iterator.hasNext()) {
@@ -52,7 +52,8 @@ public final class LiveChunkCapture {
             LevelChunk chunk = loaded.get(key);
             if (chunk != null) {
                 if (!producer.hasCapacity(chunk.getSections().length)) break;
-                producer.capture(chunk);
+                //Chunks are visible before their light packet is applied; keep them dirty and retry next tick.
+                if (!producer.capture(chunk)) continue;
             }
             iterator.remove();
         }

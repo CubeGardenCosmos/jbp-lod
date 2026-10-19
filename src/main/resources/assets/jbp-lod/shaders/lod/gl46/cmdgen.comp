@@ -42,9 +42,13 @@ void writeCmd(uint idx, uint limit, uint instance, uint offset, uint quadCount) 
 #define WRITE_TEMPORAL(idx, instance, offset, quadCount) writeCmd(idx, uint(TEMPORAL_OFFSET)+uint(TEMPORAL_CAPACITY), instance, offset, quadCount)
 
 // JBP-LOD deviation from upstream: no draw command for a section whose whole horizontal AABB is nearer
-// than the vanilla render distance plus the overlap margin. Uses the AABB's farthest horizontal point so a
-// section straddling the radius is still drawn (overlap) and no seam opens at the vanilla edge. The radius
-// is refreshed every frame from the live game options, so it follows teleports and render-distance changes.
+// than the near-exclusion radius. The radius is the vanilla coverage radius (renderDistanceChunks * 16,
+// clamped by active environmental fog) MINUS the inward overlap margin, so the excluded disk can never
+// reach past the region Sodium guarantees to draw. Excluding with a larger radius left an annulus that
+// neither vanilla (culled) nor LOD (excluded) drew: a circular hole ring at the vanilla edge. Uses the
+// AABB's farthest horizontal point so a section straddling the radius is still drawn (overlap) and no
+// seam opens. The radius is refreshed every frame from the live game options, so it follows teleports and
+// render-distance changes.
 bool isExcludedByNearRange(SectionMeta meta, uint detail) {
     if (exclusionRadius <= 0.0) {
         return false;

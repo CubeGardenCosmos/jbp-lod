@@ -278,7 +278,8 @@ public final class VulkanLodRenderer {
                             color.width(), color.height(), SUBDIVISION_SIZE, runtime.renderDistanceSections(),
                             runtime.requestQueueSize(),
                             LodNearExclusion.radiusBlocks(
-                                    Minecraft.getInstance().options.getEffectiveRenderDistance()),
+                                    Minecraft.getInstance().options.getEffectiveRenderDistance(),
+                                    targets.fog().end()),
                             runtime.nodeInputs(),
                             runtime.nodeBuffers().sectionMetadata(), runtime.takeVisibilityOps(), runCleaner,
                             runtime.cleanerMaxNodeId(), hooks);

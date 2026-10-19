@@ -20,6 +20,8 @@ public final class LodStats {
     private final AtomicLong lightNoBlockLayer = new AtomicLong();
     private final AtomicLong lightSkyZero = new AtomicLong();
     private final AtomicLong lightSkyFull = new AtomicLong();
+    private final AtomicLong lightSkyDefaulted = new AtomicLong();
+    private final AtomicLong lightDeferred = new AtomicLong();
     private volatile int nodes;
     private volatile int metadataSlots;
     private volatile int pendingRequests;
@@ -34,13 +36,23 @@ public final class LodStats {
     private volatile String queueDepths = "";
     private volatile NodeDiagnostics nodeDiagnostics = NodeDiagnostics.EMPTY;
 
-    /** Per ingested section: whether the light layers were present and whether sky light was all-0/all-15. */
-    public void lightSection(boolean skyLayer, boolean blockLayer, boolean skyZero, boolean skyFull) {
+    /**
+     * Per ingested section: whether the raw light layers were present, whether sky light was all-0/all-15 after
+     * the engine's missing-layer default was applied, and whether that default had to be used.
+     */
+    public void lightSection(boolean skyLayer, boolean blockLayer, boolean skyZero, boolean skyFull,
+                             boolean skyDefaulted) {
         lightSections.incrementAndGet();
         if (!skyLayer) lightNoSkyLayer.incrementAndGet();
         if (!blockLayer) lightNoBlockLayer.incrementAndGet();
-        if (skyLayer && skyZero) lightSkyZero.incrementAndGet();
-        if (skyLayer && skyFull) lightSkyFull.incrementAndGet();
+        if (skyZero) lightSkyZero.incrementAndGet();
+        if (skyFull) lightSkyFull.incrementAndGet();
+        if (skyDefaulted) lightSkyDefaulted.incrementAndGet();
+    }
+
+    /** A chunk capture was deferred because its light packet had not been applied yet; it stays dirty. */
+    public void lightDeferred() {
+        lightDeferred.incrementAndGet();
     }
 
     public void chunkCaptured() {
@@ -104,7 +116,8 @@ public final class LodStats {
                 + " quads=" + totalQuads.get()
                 + " light[sections=" + lightSections.get() + " noSkyLayer=" + lightNoSkyLayer.get()
                 + " noBlockLayer=" + lightNoBlockLayer.get() + " skyZero=" + lightSkyZero.get()
-                + " skyFull=" + lightSkyFull.get() + "]"
+                + " skyFull=" + lightSkyFull.get() + " skyDefaulted=" + lightSkyDefaulted.get()
+                + " deferred=" + lightDeferred.get() + "]"
                 + " nodes=" + nodes
                 + " metadataSlots=" + metadataSlots
                 + " models published=" + modelsPublished + " pending=" + modelsPending

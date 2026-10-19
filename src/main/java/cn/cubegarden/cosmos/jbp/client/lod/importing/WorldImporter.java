@@ -368,13 +368,22 @@ public final class WorldImporter implements AutoCloseable {
             return;
         }
         boolean imported = false;
+        var sections = new ArrayList<CompoundTag>();
+        int maxSectionY = Integer.MIN_VALUE;
+        java.util.Map<Integer, DataLayer> skyLayers = new java.util.HashMap<>();
         for (var element : chunk.getList("sections").orElseThrow()) {
             CompoundTag section = (CompoundTag) element;
             int sectionY = section.getIntOr("Y", Integer.MIN_VALUE);
             if (sectionY == Integer.MIN_VALUE) {
                 continue;
             }
-            imported |= importSection(context, chunkX, sectionY, chunkZ, section);
+            sections.add(section);
+            maxSectionY = Math.max(maxSectionY, sectionY);
+            section.getByteArray("SkyLight").ifPresent(bytes -> skyLayers.put(sectionY, new DataLayer(bytes)));
+        }
+        for (CompoundTag section : sections) {
+            int sectionY = section.getIntOr("Y", Integer.MIN_VALUE);
+            imported |= importSection(context, chunkX, sectionY, chunkZ, section, skyLayers, maxSectionY);
         }
         if (imported) {
             chunksImported.incrementAndGet();
@@ -384,15 +393,22 @@ public final class WorldImporter implements AutoCloseable {
     }
 
     private boolean importSection(ImportContext context, int chunkX, int sectionY, int chunkZ,
-                                  CompoundTag section) {
+                                  CompoundTag section, java.util.Map<Integer, DataLayer> skyLayers,
+                                  int maxSectionY) {
         Optional<CompoundTag> blockStatesTag = section.getCompound("block_states");
         if (blockStatesTag.isEmpty()) {
             return false;
         }
         byte[] blockLightData = section.getByteArray("BlockLight").orElse(EMPTY);
-        byte[] skyLightData = section.getByteArray("SkyLight").orElse(EMPTY);
         DataLayer blockLight = blockLightData.length != 0 ? new DataLayer(blockLightData) : null;
-        DataLayer skyLight = skyLightData.length != 0 ? new DataLayer(skyLightData) : null;
+        //Saved chunks omit SkyLight wherever the light engine derives it instead of storing it (above the
+        //column's top light section); reading that absence as 0 blackens the top faces of imported terrain.
+        DataLayer skyLight = skyLayers.get(sectionY);
+        if (skyLight == null) {
+            skyLight = cn.cubegarden.cosmos.jbp.client.lod.data.ingest.SkyLightFallback.resolve(
+                    chunkX, sectionY, chunkZ, maxSectionY,
+                    (x, y, z) -> x == chunkX && z == chunkZ ? skyLayers.get(y) : null);
+        }
 
         var blockStatesResult = context.blockStateCodec().parse(NbtOps.INSTANCE, blockStatesTag.get());
         if (!blockStatesResult.hasResultOrPartial()) {

@@ -37,12 +37,31 @@ public final class LiveSectionProducer {
      * admitted against the ingest backlog bound before its snapshot is built; sections that do not fit are counted
      * and dropped rather than queued without limit.
      *
-     * @return number of non-empty sections rejected by the backlog bound (0 when every section was admitted)
+     * <p>The chunk is only captured once the light engine has data for every non-air section. Chunks arrive from
+     * the network before their light packet is applied, so capturing on the load event alone would store air with
+     * sky light 0 and blacken the adjacent terrain. When this returns {@code false} the chunk stays dirty.
+     *
+     * @return {@code false} when the chunk's light is not applied yet (nothing was captured)
      */
-    public synchronized int capture(LevelChunk chunk) {
-        session.stats().chunkCaptured();
-        var light = chunk.getLevel().getLightEngine();
+    public synchronized boolean capture(LevelChunk chunk) {
+        var level = chunk.getLevel();
+        var light = level.getLightEngine();
+        var skyListener = light.getLayerListener(LightLayer.SKY);
+        var blockListener = light.getLayerListener(LightLayer.BLOCK);
+        int maxSectionY = level.getMaxSectionY();
         int sectionY = chunk.getMinSectionY();
+        for (var section : chunk.getSections()) {
+            int y = sectionY++;
+            if (section == null) continue;
+            var pos = net.minecraft.core.SectionPos.of(chunk.getPos(), y);
+            if (!SkyLightFallback.ready(section.hasOnlyAir(), skyListener.getDataLayerData(pos),
+                    blockListener.getDataLayerData(pos))) {
+                session.stats().lightDeferred();
+                return false;
+            }
+        }
+        session.stats().chunkCaptured();
+        sectionY = chunk.getMinSectionY();
         int accepted = 0, rejected = 0;
         for (var section : chunk.getSections()) {
             int y = sectionY++;
@@ -57,10 +76,16 @@ public final class LiveSectionProducer {
             for (int i = 0; i < 4096; i++) states[i] = section.getStates().get(i & 15, i >> 8, (i >> 4) & 15);
             for (int i = 0; i < 64; i++) biomes[i] = section.getBiomes().get(i & 3, i >> 4, (i >> 2) & 3);
             var pos = net.minecraft.core.SectionPos.of(chunk.getPos(), y);
-            var block = light.getLayerListener(LightLayer.BLOCK).getDataLayerData(pos);
-            var sky = light.getLayerListener(LightLayer.SKY).getDataLayerData(pos);
+            var block = blockListener.getDataLayerData(pos);
+            var sky = skyListener.getDataLayerData(pos);
             var blockCopy = block == null ? null : block.copy();
-            var skyCopy = sky == null ? null : sky.copy();
+            //Sections above the light data have no stored layer; the engine derives 15 there. Never treat that
+            //as darkness: air light feeds the mesher's neighbor faces, so it would blacken the terrain below.
+            boolean skyDefaulted = sky == null;
+            var skyCopy = skyDefaulted
+                    ? SkyLightFallback.resolve(pos.x(), y, pos.z(), maxSectionY,
+                            (sx, sy, sz) -> skyListener.getDataLayerData(net.minecraft.core.SectionPos.of(sx, sy, sz)))
+                    : sky.copy();
             int x = chunk.getPos().x(), z = chunk.getPos().z();
             try {
                 worker.execute(() -> {
@@ -69,18 +94,18 @@ public final class LiveSectionProducer {
                         long[] words = new long[4096];
                         IdMapper mapper = session.mapper();
                         int skySum = 0;
-                        boolean skyAllZero = skyCopy != null;
+                        boolean skyAllZero = true;
                         for (int i = 0; i < words.length; i++) {
                             int vx = i & 15, vy = i >> 8, vz = (i >> 4) & 15;
-                            int skyLevel = skyCopy == null ? 0 : Math.min(15, skyCopy.get(vx, vy, vz));
+                            int skyLevel = Math.min(15, skyCopy.get(vx, vy, vz));
                             skySum += skyLevel;
                             if (skyLevel != 0) skyAllZero = false;
                             int illumination = skyLevel
                                     | ((blockCopy == null ? 0 : Math.min(15, blockCopy.get(vx, vy, vz))) << 4);
                             words[i] = mapper.getBaseId((byte) illumination, states[i], biomes[(vx >> 2) | (vz >> 2) << 2 | (vy >> 2) << 4]);
                         }
-                        session.stats().lightSection(skyCopy != null, blockCopy != null, skyAllZero,
-                                skyCopy != null && skySum == 4096 * 15);
+                        session.stats().lightSection(!skyDefaulted, blockCopy != null, skyAllZero,
+                                skySum == 4096 * 15, skyDefaulted);
                         writeHierarchy(x, y, z, words);
                         session.stats().sectionIngested();
                     } catch (RuntimeException failure) {
@@ -100,7 +125,7 @@ public final class LiveSectionProducer {
         if (rejected > 0 && ActivationLog.first("capture-drop")) {
             LOGGER.warn("[JBP-LOD] Ingest backlog full ({} sections): dropping sections of an unloading chunk; they are captured again when the chunk reloads.", CaptureAdmission.MAX_PENDING_SECTIONS);
         }
-        return rejected;
+        return true;
     }
 
     private void writeHierarchy(int x, int y, int z, long[] source) {
