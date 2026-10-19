@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeLayout;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -8,6 +9,7 @@ import java.nio.ByteOrder;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LodReadbackProbeTest {
@@ -20,7 +22,7 @@ class LodReadbackProbeTest {
     }
 
     @Test
-    void enabledProbeSamplesAfterWarmupEvery120FramesUpToCap() {
+    void enabledProbeSamplesConsecutiveFramePairsAfterWarmup() {
         LodReadbackProbe probe = new LodReadbackProbe(true);
         java.util.List<Integer> fired = new java.util.ArrayList<>();
         for (int i = 1; i <= LodReadbackProbe.WARMUP_FRAMES + 10 * LodReadbackProbe.SAMPLE_INTERVAL_FRAMES; i++) {
@@ -28,8 +30,27 @@ class LodReadbackProbeTest {
                 fired.add(i);
             }
         }
-        assertEquals(java.util.List.of(120, 240, 360, 480), fired);
+        // Pairs of adjacent frames: pass-count oscillation between frame N and N+1 is visible per sample.
+        assertEquals(java.util.List.of(120, 121, 240, 241, 360, 361, 480, 481), fired);
         assertEquals(LodReadbackProbe.MAX_SAMPLES, fired.size());
+    }
+
+    @Test
+    void visibilityCensusSplitsPreviousCurrentAndTemporalNextSections() {
+        int frameId = LodComputeLayout.packFrameId(7);
+        ByteBuffer words = ByteBuffer.allocate(5 * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        // Absolute puts: the buffer position stays 0, so no flip is needed before reading.
+        words.putInt(0, LodComputeLayout.encodeVisibility(frameId, true));   // drawn now and last frame
+        words.putInt(4, LodComputeLayout.encodeVisibility(frameId, false));  // temporal addition next frame
+        words.putInt(8, LodComputeLayout.encodeVisibility(frameId - 1, true)); // stale: not in this frame
+        words.putInt(12, -1);                                                // never visited
+        words.putInt(16, LodComputeLayout.encodeVisibility(frameId, true));  // drawn now and last frame
+
+        LodReadbackProbe.VisibilityStats stats = LodReadbackProbe.summarizeVisibility(words, 5, frameId);
+        assertEquals(3, stats.visibleNow());
+        assertEquals(2, stats.previousFlagSet());
+        assertEquals(1, stats.temporalNext());
+        assertEquals(2, stats.other());
     }
 
     @Test

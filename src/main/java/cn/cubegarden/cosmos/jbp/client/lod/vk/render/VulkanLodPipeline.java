@@ -541,6 +541,20 @@ public final class VulkanLodPipeline implements AutoCloseable {
                     VK_CULL_MODE_NONE, Stencil.OFF);
         }
 
+        /**
+         * LOD composite state: it depth-tests the reprojected LOD fragment against the borrowed game depth so
+         * vanilla geometry keeps occluding LOD, but it MUST NOT write depth. The borrowed game depth is the
+         * only source for the vanilla-only seed snapshot; any LOD depth written there comes back as "vanilla"
+         * in the next frame's seed and suppresses the LOD on exactly the pixels it just drew, which is the
+         * frame-to-frame flicker and coverage collapse this port has to avoid.
+         */
+        public static State composite(int colorFormat, int depthFormat, boolean reverseZ) {
+            return new State(colorFormat, depthFormat, true, false,
+                    reverseZ ? org.lwjgl.vulkan.VK10.VK_COMPARE_OP_GREATER_OR_EQUAL
+                            : org.lwjgl.vulkan.VK10.VK_COMPARE_OP_LESS_OR_EQUAL,
+                    BlendMode.ALPHA, VK_CULL_MODE_NONE, Stencil.OFF);
+        }
+
         public State withStencil(Stencil value) {
             return new State(colorFormat, depthFormat, depthTest, depthWrite, depthCompareOp, blendMode,
                     cullMode, value);

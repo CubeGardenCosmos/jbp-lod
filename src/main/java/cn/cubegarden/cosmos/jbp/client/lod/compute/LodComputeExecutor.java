@@ -751,7 +751,10 @@ public final class LodComputeExecutor implements AutoCloseable {
     /**
      * Per-frame inputs. {@code mvp} is the 16-float column-major projection*modelView (camera-relative,
      * rotation-only view, Vulkan zero-to-one depth). {@code visibilityOps} (nullable) are upstream batch
-     * visibility ids: bit 31 set stores the frame id, clear stores 0xFFFFFFFF.
+     * visibility ids: bit 31 set stores the frame id, clear stores 0xFFFFFFFF. {@code frameId} is the
+     * recorded-LOD-frame visibility id (already packed by {@link LodComputeLayout#packFrameId}; masking is
+     * idempotent) and must advance by exactly one per recorded frame, because the shaders classify temporal
+     * additions as {@code storedFrameId == frameId - 1}.
      */
     public record FrameInputs(long frameId, float[] mvp, double cameraX, double cameraY, double cameraZ,
                               int viewportWidth, int viewportHeight, float subdivisionSize,

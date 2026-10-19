@@ -52,6 +52,10 @@ class LodVanillaSeedHistoryTest {
         assertTrue(record.contains("slot.retireAfterUse(gameDepthView)"));
         String convert = Files.readString(Path.of("src/main/java/cn/cubegarden/cosmos/jbp/client/lod/vk/render/LodDepthConvertPass.java"));
         assertTrue(convert.contains("if (gameDepthView != 0)"));
-        assertTrue(convert.contains("depth(gameFar).stencil(1)"));
+        // Without a vanilla snapshot the seed must not leave the target at "LOD may draw here": an unmasked
+        // first frame would inject LOD depth into the borrowed game depth and start the self-masking loop.
+        assertTrue(convert.contains("stencil(seedClearStencil(gameDepthView != 0))"));
+        String composite = Files.readString(Path.of("src/main/java/cn/cubegarden/cosmos/jbp/client/lod/vk/render/LodOffscreenPass.java"));
+        assertTrue(composite.contains("VulkanLodPipeline.State.composite(colorFormat, gameDepthFormat, reverseZ)"));
     }
 }

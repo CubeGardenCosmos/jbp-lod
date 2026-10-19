@@ -154,6 +154,44 @@ public final class LodComputeLayout {
         return (int) (frameId & 0x7fffffffL);
     }
 
+    /** Low 31 bits of a section visibility word: the frame id in which the section was last drawn. */
+    public static final int VISIBILITY_FRAME_MASK = 0x7fffffff;
+    /** Bit 31 of a section visibility word: set when the section was drawn in the previous LOD frame. */
+    public static final int VISIBILITY_PREVIOUS_FLAG = 0x80000000;
+
+    /**
+     * The word {@code cull/raster.frag} stores for a section (upstream {@code cull/raster.vert}): the packed
+     * frame id plus the "was visible last frame" flag, so the next frame can classify temporal additions.
+     */
+    public static int encodeVisibility(int packedFrameId, boolean visibleLastFrame) {
+        return (packedFrameId & VISIBILITY_FRAME_MASK)
+                | (visibleLastFrame ? VISIBILITY_PREVIOUS_FLAG : 0);
+    }
+
+    /**
+     * Whether a stored word says the section was drawn in the previous LOD frame:
+     * {@code raster.vert}'s {@code previous == frameId - 1}. A stored word from any other frame (unvisited,
+     * skipped frame, resumed from a stale buffer) is never "visible last frame", so the section is drawn
+     * again in the temporal range instead of being silently dropped.
+     */
+    public static boolean wasVisibleLastFrame(int storedWord, int packedFrameId) {
+        return (storedWord & VISIBILITY_FRAME_MASK) == ((packedFrameId - 1) & VISIBILITY_FRAME_MASK);
+    }
+
+    /** Whether a stored word says the section is drawn in {@code packedFrameId} ({@code cmdgen.comp}). */
+    public static boolean visibleThisFrame(int storedWord, int packedFrameId) {
+        return (storedWord & VISIBILITY_FRAME_MASK) == (packedFrameId & VISIBILITY_FRAME_MASK);
+    }
+
+    /**
+     * Whether {@code cmdgen.comp} writes this section into the temporal range: it is drawn this frame but was
+     * not drawn in the previous one. The previous-frame opaque range is supplied separately, so a section
+     * classified temporally is never lost even when the frame id skips a value.
+     */
+    public static boolean rendersTemporally(int storedWord) {
+        return (storedWord & VISIBILITY_PREVIOUS_FLAG) == 0;
+    }
+
     /** Upstream: {@code subDivisionSize^2 / (width*height)}, the screen fraction below which nodes stop descending. */
     public static float minimumScreenSpaceSize(float subdivisionSize, int width, int height) {
         if (!(subdivisionSize > 0) || width <= 0 || height <= 0) {

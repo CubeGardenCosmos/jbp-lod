@@ -52,12 +52,12 @@ final class LodOffscreenPass implements AutoCloseable {
                 if (result != VK_SUCCESS) throw new IllegalStateException("LOD composite sampler creation failed: " + result);
                 sampler = handle.get(0);
             }
+            // Depth test only: see State.composite. The composite must never write LOD depth into the
+            // borrowed game depth attachment, which is the only source for the vanilla-only seed snapshot.
             composite = VulkanLodPipeline.create(game,
                     compiler.compile("lod/depth_convert.vert", Map.of()),
                     compiler.compile("lod/offscreen_composite.frag", Map.of()),
-                    VulkanLodPipeline.State.of(colorFormat, gameDepthFormat, true, true,
-                            reverseZ ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
-                            VulkanLodPipeline.BlendMode.ALPHA), frameSlots);
+                    VulkanLodPipeline.State.composite(colorFormat, gameDepthFormat, reverseZ), frameSlots);
             for (int slot = 0; slot < frameSlots; slot++) {
                 colors[slot] = new LodColorTarget(game, this.colorFormat, width, height);
                 depths[slot] = LodDepthTarget.create(game, width, height, LodDepthTarget.SEED_FORMAT);

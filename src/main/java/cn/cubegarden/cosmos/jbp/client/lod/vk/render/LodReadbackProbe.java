@@ -3,6 +3,7 @@ package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
+import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeLayout;
 import cn.cubegarden.cosmos.jbp.client.lod.data.LodSceneUniform;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
@@ -34,7 +35,8 @@ final class LodReadbackProbe {
     static final String PROPERTY = "jbp.lod.debugReadback";
     static final int WARMUP_FRAMES = 120;
     static final int SAMPLE_INTERVAL_FRAMES = 120;
-    static final int MAX_SAMPLES = 4;
+    /** Eight samples: four consecutive pairs, so pass-count oscillation between adjacent frames is visible. */
+    static final int MAX_SAMPLES = 8;
     static final int COMMAND_BYTES = 20;
     static final int CONTROL_BYTES = 44;
     static final int HALF_RGBA_PIXEL_BYTES = 8;
@@ -45,6 +47,7 @@ final class LodReadbackProbe {
     private final boolean enabled;
     private int framesSeen;
     private int samplesTaken;
+    private int pendingConsecutive;
 
     LodReadbackProbe() {
         this(Boolean.getBoolean(PROPERTY));
@@ -55,19 +58,95 @@ final class LodReadbackProbe {
     }
 
     /**
-     * Counts one prepared frame; returns true at the first frame at or after warmup and every
-     * {@link #SAMPLE_INTERVAL_FRAMES} after it, at most {@link #MAX_SAMPLES} times when enabled.
+     * Counts one prepared frame; returns true at the first frame at or after warmup, at that frame's
+     * successor, and again every {@link #SAMPLE_INTERVAL_FRAMES} after the pair, at most
+     * {@link #MAX_SAMPLES} times when enabled. Each sample therefore captures two consecutive frames so
+     * per-frame pass-count oscillation is visible in the log instead of only across 120-frame gaps.
      */
     boolean tick() {
         if (!enabled || samplesTaken >= MAX_SAMPLES) {
             return false;
         }
         framesSeen++;
-        if (framesSeen < WARMUP_FRAMES || (framesSeen - WARMUP_FRAMES) % SAMPLE_INTERVAL_FRAMES != 0) {
+        if (framesSeen < WARMUP_FRAMES) {
+            return false;
+        }
+        if (pendingConsecutive > 0) {
+            pendingConsecutive--;
+            samplesTaken++;
+            return true;
+        }
+        if ((framesSeen - WARMUP_FRAMES) % SAMPLE_INTERVAL_FRAMES != 0) {
             return false;
         }
         samplesTaken++;
+        pendingConsecutive = 1;
         return true;
+    }
+
+    /** Section visibility buffer plus the frame id the frame was recorded with. */
+    record VisibilitySource(GpuBuffer sectionVisibility, int packedFrameId) {
+        VisibilitySource {
+            java.util.Objects.requireNonNull(sectionVisibility, "sectionVisibility");
+            visibilitySectionCapacity(sectionVisibility.capacity());
+            checkPackedFrameId(packedFrameId);
+        }
+
+        int sectionCapacity() {
+            return visibilitySectionCapacity(sectionVisibility.capacity());
+        }
+    }
+
+    /** Section words a section-visibility buffer of {@code capacityBytes} covers; throws when it cannot be read. */
+    static int visibilitySectionCapacity(long capacityBytes) {
+        if (capacityBytes < Integer.BYTES || capacityBytes % Integer.BYTES != 0) {
+            throw new IllegalArgumentException("section visibility buffer must hold whole 32-bit words");
+        }
+        return (int) (capacityBytes / Integer.BYTES);
+    }
+
+    /** The frame id the shaders compare must be a packed, non-negative 31-bit value. */
+    static int checkPackedFrameId(int packedFrameId) {
+        if (packedFrameId < 0) {
+            throw new IllegalArgumentException("packed frame id must be non-negative");
+        }
+        return packedFrameId;
+    }
+
+    /**
+     * Census of the section-indexed visibility words after a frame: how many sections this frame's raster
+     * drew, and how many of those carry the "visible in the previous frame" flag. {@code temporalNext} is the
+     * set {@code cmdgen.comp} classifies as temporal additions on the next frame (this frame's word with the
+     * flag clear), which is the per-frame oscillation signature: a section flipping between the two sets on
+     * adjacent samples is a toggling classification.
+     */
+    record VisibilityStats(long visibleNow, long previousFlagSet, long temporalNext, long other) {
+        @Override public String toString() {
+            return "visibleNow=" + visibleNow + " previousFlagSet=" + previousFlagSet
+                    + " temporalNext=" + temporalNext + " other=" + other;
+        }
+    }
+
+    static VisibilityStats summarizeVisibility(ByteBuffer bytes, int words, int packedFrameId) {
+        ByteBuffer b = bytes.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        long visibleNow = 0;
+        long previousFlagSet = 0;
+        long temporalNext = 0;
+        long other = 0;
+        for (int i = 0; i < words; i++) {
+            int word = b.getInt(i * Integer.BYTES);
+            if (!LodComputeLayout.visibleThisFrame(word, packedFrameId)) {
+                other++;
+                continue;
+            }
+            visibleNow++;
+            if ((word & LodComputeLayout.VISIBILITY_PREVIOUS_FLAG) != 0) {
+                previousFlagSet++;
+            } else {
+                temporalNext++;
+            }
+        }
+        return new VisibilityStats(visibleNow, previousFlagSet, temporalNext, other);
     }
 
     /** Colour statistics of an RGBA16F image: per-channel min/max over finite values. */
@@ -153,39 +232,51 @@ final class LodReadbackProbe {
         return values;
     }
 
-    void capture(GameVulkan.Snapshot game, LodOffscreenPass offscreen, LodFrameBuffers slot, long frameNumber) {
+    void capture(GameVulkan.Snapshot game, LodOffscreenPass offscreen, LodFrameBuffers slot, long frameNumber,
+                 VisibilitySource visibility) {
         int width = offscreen.width();
         int height = offscreen.height();
         long colorBytes = (long) width * height * HALF_RGBA_PIXEL_BYTES;
         long stencilBytes = (long) width * height;
         long commandBytes = slot.drawCommands().capacity();
+        long visibilityBytes = visibility.sectionVisibility().capacity();
         GpuBuffer colorReadback = null;
         GpuBuffer commandReadback = null;
         GpuBuffer controlReadback = null;
         GpuBuffer stencilReadback = null;
+        GpuBuffer visibilityReadback = null;
         try {
             colorReadback = GpuBuffer.allocateReadback(game, colorBytes);
             commandReadback = GpuBuffer.allocateReadback(game, commandBytes);
             controlReadback = GpuBuffer.allocateReadback(game, CONTROL_BYTES);
             stencilReadback = GpuBuffer.allocateReadback(game, stencilBytes);
+            visibilityReadback = GpuBuffer.allocateReadback(game, visibilityBytes);
             VkDevice device = game.device();
             vkDeviceWaitIdle(device);
             copyToHost(game, offscreen.colorImage(slot.slotIndex()), offscreen.depthTarget(slot.slotIndex()).image(),
-                    width, height, slot, colorReadback, commandReadback, controlReadback, stencilReadback, commandBytes);
+                    width, height, slot, colorReadback, commandReadback, controlReadback, stencilReadback,
+                    visibility.sectionVisibility(), visibilityReadback, commandBytes, visibilityBytes);
 
             colorReadback.invalidate(0, colorBytes);
             commandReadback.invalidate(0, commandBytes);
             controlReadback.invalidate(0, CONTROL_BYTES);
             stencilReadback.invalidate(0, stencilBytes);
+            visibilityReadback.invalidate(0, visibilityBytes);
             slot.sceneUniform().invalidate(0, LodSceneUniform.BYTE_SIZE);
             ColorStats stats = summarizeRgba16f(colorReadback.mappedBytes(), width * height);
             StencilStats seed = summarizeStencil(stencilReadback.mappedBytes(), width * height);
+            VisibilityStats census = summarizeVisibility(visibilityReadback.mappedBytes(),
+                    visibility.sectionCapacity(), visibility.packedFrameId());
             ByteBuffer commands = commandReadback.mappedBytes();
             int opaque = countRegion(commands, LodFrameBuffers.DrawRegion.OPAQUE);
             int translucent = countRegion(commands, LodFrameBuffers.DrawRegion.TRANSLUCENT);
             int temporal = countRegion(commands, LodFrameBuffers.DrawRegion.TEMPORAL_OPAQUE);
-            LOGGER.info("[JBP-LOD] V4 debug readback: frame={} slot={} size={}x{} nonzeroDraws[opaque={} translucent={} temporal={}] control={} colour {}",
-                    frameNumber, slot.slotIndex(), width, height, opaque, translucent, temporal,
+            // All three pass counts, the frame id and the previous-visible census in one line: an
+            // oscillating classification shows up as adjacent samples that disagree here.
+            LOGGER.info("[JBP-LOD] V4 debug readback: frame={} slot={} visFrame={} size={}x{} "
+                            + "nonzeroDraws[opaque={} translucent={} temporal={}] visibility[{}] control={} colour {}",
+                    frameNumber, slot.slotIndex(), visibility.packedFrameId(), width, height,
+                    opaque, translucent, temporal, census,
                     Arrays.toString(describeControl(controlReadback.mappedBytes())), stats);
             LOGGER.info("[JBP-LOD] V4 debug readback seed: stencilSky(1)={}/{} stencilVanilla(0)={} seedMaskedShare={} other={}",
                     seed.sky(), seed.pixels(), seed.vanilla(), String.format(java.util.Locale.ROOT, "%.4f", seed.vanillaShare()),
@@ -202,6 +293,7 @@ final class LodReadbackProbe {
             closeQuietly(commandReadback);
             closeQuietly(controlReadback);
             closeQuietly(stencilReadback);
+            closeQuietly(visibilityReadback);
         }
     }
 
@@ -256,7 +348,9 @@ final class LodReadbackProbe {
 
     private static void copyToHost(GameVulkan.Snapshot game, long colorImage, long depthImage, int width, int height,
                                    LodFrameBuffers slot, GpuBuffer colorReadback, GpuBuffer commandReadback,
-                                   GpuBuffer controlReadback, GpuBuffer stencilReadback, long commandBytes) {
+                                   GpuBuffer controlReadback, GpuBuffer stencilReadback,
+                                   GpuBuffer visibilitySource, GpuBuffer visibilityReadback, long commandBytes,
+                                   long visibilityBytes) {
         long pool = 0;
         try (MemoryStack stack = stackPush()) {
             VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
@@ -289,6 +383,8 @@ final class LodReadbackProbe {
                     VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(commandBytes));
             vkCmdCopyBuffer(cb, slot.drawControl().handle(), controlReadback.handle(),
                     VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(CONTROL_BYTES));
+            vkCmdCopyBuffer(cb, visibilitySource.handle(), visibilityReadback.handle(),
+                    VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(visibilityBytes));
             VkBufferImageCopy.Buffer stencilRegion = VkBufferImageCopy.calloc(1, stack)
                     .bufferOffset(0).bufferRowLength(0).bufferImageHeight(0);
             stencilRegion.imageSubresource().aspectMask(VK_IMAGE_ASPECT_STENCIL_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);

@@ -44,6 +44,11 @@ public final class LodIndexBuffer implements AutoCloseable {
         GpuBuffer buffer = GpuBuffer.allocate(game, bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true);
         try {
             ByteBuffer indices = buffer.mappedBytes().order(ByteOrder.LITTLE_ENDIAN);
+            // Zero first: the quad pattern covers QUAD_CAPACITY quads, and everything between it and the
+            // cube pattern must not be readable as an index if a draw ever references it.
+            for (int i = 0; i < CUBE_INDEX_OFFSET + CUBE_INDEX_COUNT; i++) {
+                indices.putShort(i * INDEX_BYTES, (short) 0);
+            }
             writeQuadPattern(indices);
             writeCube(indices);
             buffer.flush(0, bytes);

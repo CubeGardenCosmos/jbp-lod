@@ -64,6 +64,16 @@ final class LodDepthConvertPass implements AutoCloseable {
     }
 
     /**
+     * Stencil value the seed clear writes before the vanilla mask is splatted. Without a vanilla snapshot
+     * nothing is known about vanilla coverage, so the target must not be left "LOD may draw here" (stencil 1):
+     * an unmasked first frame would draw LOD everywhere and (through the composite) start the self-masking
+     * loop. Zero therefore suppresses LOD until the first real snapshot exists.
+     */
+    static int seedClearStencil(boolean hasVanillaSnapshot) {
+        return hasVanillaSnapshot ? 1 : 0;
+    }
+
+    /**
      * @param gameDepthView owned vanilla-only depth view (GENERAL), or zero on the first frame
      * @param reverseZ      the game's depth convention; the LOD target uses the same one (FAR = 0 and NEAR = 1 when true)
      */
@@ -88,7 +98,7 @@ final class LodDepthConvertPass implements AutoCloseable {
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkClearValue clear = VkClearValue.calloc(stack);
-            clear.depthStencil().depth(gameFar).stencil(1);
+            clear.depthStencil().depth(gameFar).stencil(seedClearStencil(gameDepthView != 0));
             VkRenderingAttachmentInfo depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
                     .imageView(target.attachmentView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
                     .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR).storeOp(VK_ATTACHMENT_STORE_OP_STORE).clearValue(clear);

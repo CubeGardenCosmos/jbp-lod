@@ -6,6 +6,7 @@ import cn.cubegarden.cosmos.jbp.client.lod.api.LodExternalTargetsProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameContext;
 import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
 import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeExecutor;
+import cn.cubegarden.cosmos.jbp.client.lod.compute.LodComputeLayout;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelAtlasLayout;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelResources;
@@ -84,6 +85,12 @@ public final class VulkanLodRenderer {
     private long[] failedGenerations;
     private long preparedFrame = Long.MIN_VALUE;
     private final LodReadbackProbe readbackProbe = new LodReadbackProbe();
+    /**
+     * Recorded-LOD-frame counter for the section/node visibility words. Never reset: a reset while uploaded
+     * node/top-level buffers still hold the previous generation's ids could alias a stale word to "visible
+     * last frame". The shaders compare only the low 31 bits, so wrapping is harmless.
+     */
+    private long visibilityFrames;
     private RenderPass pendingPass;
     private Frame pendingFrame;
 
@@ -233,6 +240,11 @@ public final class VulkanLodRenderer {
                 float[] mvp = LodFrameMath.multiply(targets.matrices().projection(), targets.matrices().modelView());
                 long seedView = res.seedHistory.sourceSlot() < 0 ? 0
                         : res.vanillaDepth.view(res.seedHistory.sourceSlot());
+                // The visibility frame id counts recorded LOD frames, one per recorded frame, so the shaders'
+                // `previous == frameId - 1` classification is exact. GameVulkan.frameId() is a submission
+                // epoch and can advance by more than one between recorded LOD frames, which would classify
+                // every visible section as a temporal addition on every frame.
+                int visibilityFrameId = LodComputeLayout.packFrameId(visibilityFrames++);
                 boolean runCleaner;
                 {
                     runCleaner = LodFrameMath.shouldRunCleaner(runtime.nodeBuffers().geometryCapacityBytes(),
@@ -241,7 +253,7 @@ public final class VulkanLodRenderer {
                     FrameHooks hooks = new FrameHooks(res, runtime, seedView, reverseZ, plan);
                     runtime.recordUploads(commandBuffer);
                     slot.clearDrawOutputs(commandBuffer);
-                    LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(frameNumber, mvp,
+                    LodComputeExecutor.FrameInputs inputs = new LodComputeExecutor.FrameInputs(visibilityFrameId, mvp,
                             context.cameraX(), context.cameraY(), context.cameraZ(),
                             color.width(), color.height(), SUBDIVISION_SIZE, runtime.renderDistanceSections(),
                             runtime.requestQueueSize(), runtime.nodeInputs(),
@@ -280,7 +292,9 @@ public final class VulkanLodRenderer {
                 runtime.afterSubmit(slot);
                 res.hiz.retireReplaced(slot::retireAfterUse);
                 if (readbackProbe.tick()) {
-                    readbackProbe.capture(game, res.offscreen, slot, frameNumber);
+                    readbackProbe.capture(game, res.offscreen, slot, frameNumber,
+                            new LodReadbackProbe.VisibilitySource(runtime.executor().sectionVisibility(),
+                                    visibilityFrameId));
                 }
             } catch (RuntimeException | Error failure) {
                 abandonSlot(slot);
