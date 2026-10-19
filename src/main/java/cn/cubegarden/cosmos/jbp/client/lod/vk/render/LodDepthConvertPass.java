@@ -27,8 +27,8 @@ import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_B
  * Seeds the LOD depth/stencil target inside the LOD pre-pass command buffer, mirroring upstream's
  * setup_stencil_depth: the target is cleared to FAR depth and stencil 1, then a full-screen triangle
  * writes NEAR depth and stencil 0 at vanilla pixels and discards sky pixels (game depth == FAR), so
- * LOD draws gated on stencil EQUAL 1 land only on sky. The source is the previous frame's final game
- * depth, matching upstream's one-frame-latent HiZ.
+ * LOD draws gated on stencil EQUAL 1 land only on sky. The source is an owned vanilla-only depth
+ * snapshot captured before the previous frame's LOD composite; zero means no history yet.
  */
 final class LodDepthConvertPass implements AutoCloseable {
     static final int GAME_DEPTH_BINDING = 0;
@@ -64,19 +64,21 @@ final class LodDepthConvertPass implements AutoCloseable {
     }
 
     /**
-     * @param gameDepthView depth-aspect sampled view of the game's depth image (GENERAL layout)
+     * @param gameDepthView owned vanilla-only depth view (GENERAL), or zero on the first frame
      * @param reverseZ      the game's depth convention; the LOD target uses the same one (FAR = 0 and NEAR = 1 when true)
      */
     void record(VkCommandBuffer commandBuffer, int frameSlot, long gameDepthView, boolean reverseZ,
                 LodDepthTarget target) {
         float gameFar = reverseZ ? 0.0f : 1.0f;
         float lodNear = reverseZ ? 1.0f : 0.0f;
-        GpuBuffer paramBuffer = params[frameSlot];
-        paramBuffer.mappedBytes().order(ByteOrder.LITTLE_ENDIAN).putFloat(0, gameFar).putFloat(Float.BYTES, lodNear);
-        paramBuffer.flush(0, PARAMS_BYTES);
-        pipeline.writeCombinedImageSampler(frameSlot, GAME_DEPTH_BINDING, depthSampler, gameDepthView,
-                VK_IMAGE_LAYOUT_GENERAL);
-        pipeline.writeBuffer(frameSlot, PARAMS_BINDING, paramBuffer.handle(), 0, PARAMS_BYTES);
+        if (gameDepthView != 0) {
+            GpuBuffer paramBuffer = params[frameSlot];
+            paramBuffer.mappedBytes().order(ByteOrder.LITTLE_ENDIAN).putFloat(0, gameFar).putFloat(Float.BYTES, lodNear);
+            paramBuffer.flush(0, PARAMS_BYTES);
+            pipeline.writeCombinedImageSampler(frameSlot, GAME_DEPTH_BINDING, depthSampler, gameDepthView,
+                    VK_IMAGE_LAYOUT_GENERAL);
+            pipeline.writeBuffer(frameSlot, PARAMS_BINDING, paramBuffer.handle(), 0, PARAMS_BYTES);
+        }
 
         LodRenderBarriers.gameDepthWritesToSampledRead(commandBuffer);
         LodRenderBarriers.depthImageToGeneral(commandBuffer, target.image(), target.layoutBeforeUse(),
@@ -99,8 +101,10 @@ final class LodDepthConvertPass implements AutoCloseable {
             rendering.renderArea().extent().set(target.width(), target.height());
             vkCmdBeginRenderingKHR(commandBuffer, rendering);
         }
-        pipeline.bind(commandBuffer, frameSlot, 0, 0, target.width(), target.height());
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        if (gameDepthView != 0) {
+            pipeline.bind(commandBuffer, frameSlot, 0, 0, target.width(), target.height());
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        }
         vkCmdEndRenderingKHR(commandBuffer);
 
         LodRenderBarriers.lodDepthWritesToReaders(commandBuffer);

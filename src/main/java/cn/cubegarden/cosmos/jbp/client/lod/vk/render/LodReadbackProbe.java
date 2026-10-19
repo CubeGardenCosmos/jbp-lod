@@ -33,6 +33,8 @@ import org.slf4j.LoggerFactory;
 final class LodReadbackProbe {
     static final String PROPERTY = "jbp.lod.debugReadback";
     static final int WARMUP_FRAMES = 120;
+    static final int SAMPLE_INTERVAL_FRAMES = 120;
+    static final int MAX_SAMPLES = 4;
     static final int COMMAND_BYTES = 20;
     static final int CONTROL_BYTES = 44;
     static final int HALF_RGBA_PIXEL_BYTES = 8;
@@ -42,7 +44,7 @@ final class LodReadbackProbe {
 
     private final boolean enabled;
     private int framesSeen;
-    private boolean done;
+    private int samplesTaken;
 
     LodReadbackProbe() {
         this(Boolean.getBoolean(PROPERTY));
@@ -52,15 +54,19 @@ final class LodReadbackProbe {
         this.enabled = enabled;
     }
 
-    /** Counts one prepared frame; returns true exactly once, after warmup, when enabled. */
+    /**
+     * Counts one prepared frame; returns true at the first frame at or after warmup and every
+     * {@link #SAMPLE_INTERVAL_FRAMES} after it, at most {@link #MAX_SAMPLES} times when enabled.
+     */
     boolean tick() {
-        if (!enabled || done) {
+        if (!enabled || samplesTaken >= MAX_SAMPLES) {
             return false;
         }
-        if (++framesSeen < WARMUP_FRAMES) {
+        framesSeen++;
+        if (framesSeen < WARMUP_FRAMES || (framesSeen - WARMUP_FRAMES) % SAMPLE_INTERVAL_FRAMES != 0) {
             return false;
         }
-        done = true;
+        samplesTaken++;
         return true;
     }
 
@@ -100,6 +106,31 @@ final class LodReadbackProbe {
         return new ColorStats(min, max, nonzero, pixels, nonFinite);
     }
 
+    /** Stencil census of the seed: stencil 1 = sky (LOD may draw), stencil 0 = vanilla-masked. */
+    record StencilStats(long sky, long vanilla, long other, long pixels) {
+        double vanillaShare() {
+            return pixels == 0 ? 0.0 : (double) vanilla / pixels;
+        }
+    }
+
+    static StencilStats summarizeStencil(ByteBuffer bytes, int pixels) {
+        ByteBuffer b = bytes.duplicate();
+        long sky = 0;
+        long vanilla = 0;
+        long other = 0;
+        for (int p = 0; p < pixels; p++) {
+            int s = b.get(p) & 0xFF;
+            if (s == 1) {
+                sky++;
+            } else if (s == 0) {
+                vanilla++;
+            } else {
+                other++;
+            }
+        }
+        return new StencilStats(sky, vanilla, other, pixels);
+    }
+
     /** Counts commands with a non-zero index count and instance count in [firstCommand, firstCommand+count). */
     static int countDrawCommands(ByteBuffer commands, int firstCommand, int count) {
         ByteBuffer b = commands.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -126,24 +157,29 @@ final class LodReadbackProbe {
         int width = offscreen.width();
         int height = offscreen.height();
         long colorBytes = (long) width * height * HALF_RGBA_PIXEL_BYTES;
+        long stencilBytes = (long) width * height;
         long commandBytes = slot.drawCommands().capacity();
         GpuBuffer colorReadback = null;
         GpuBuffer commandReadback = null;
         GpuBuffer controlReadback = null;
+        GpuBuffer stencilReadback = null;
         try {
             colorReadback = GpuBuffer.allocateReadback(game, colorBytes);
             commandReadback = GpuBuffer.allocateReadback(game, commandBytes);
             controlReadback = GpuBuffer.allocateReadback(game, CONTROL_BYTES);
+            stencilReadback = GpuBuffer.allocateReadback(game, stencilBytes);
             VkDevice device = game.device();
             vkDeviceWaitIdle(device);
-            copyToHost(game, offscreen.colorImage(slot.slotIndex()), width, height,
-                    slot, colorReadback, commandReadback, controlReadback, commandBytes);
+            copyToHost(game, offscreen.colorImage(slot.slotIndex()), offscreen.depthTarget(slot.slotIndex()).image(),
+                    width, height, slot, colorReadback, commandReadback, controlReadback, stencilReadback, commandBytes);
 
             colorReadback.invalidate(0, colorBytes);
             commandReadback.invalidate(0, commandBytes);
             controlReadback.invalidate(0, CONTROL_BYTES);
+            stencilReadback.invalidate(0, stencilBytes);
             slot.sceneUniform().invalidate(0, LodSceneUniform.BYTE_SIZE);
             ColorStats stats = summarizeRgba16f(colorReadback.mappedBytes(), width * height);
+            StencilStats seed = summarizeStencil(stencilReadback.mappedBytes(), width * height);
             ByteBuffer commands = commandReadback.mappedBytes();
             int opaque = countRegion(commands, LodFrameBuffers.DrawRegion.OPAQUE);
             int translucent = countRegion(commands, LodFrameBuffers.DrawRegion.TRANSLUCENT);
@@ -151,6 +187,9 @@ final class LodReadbackProbe {
             LOGGER.info("[JBP-LOD] V4 debug readback: frame={} slot={} size={}x{} nonzeroDraws[opaque={} translucent={} temporal={}] control={} colour {}",
                     frameNumber, slot.slotIndex(), width, height, opaque, translucent, temporal,
                     Arrays.toString(describeControl(controlReadback.mappedBytes())), stats);
+            LOGGER.info("[JBP-LOD] V4 debug readback seed: stencilSky(1)={}/{} stencilVanilla(0)={} seedMaskedShare={} other={}",
+                    seed.sky(), seed.pixels(), seed.vanilla(), String.format(java.util.Locale.ROOT, "%.4f", seed.vanillaShare()),
+                    seed.other());
             LOGGER.info("[JBP-LOD] V4 debug readback first draw: opaque={} translucent={} temporal={}; scene {}",
                     describeFirstDraw(commands, LodFrameBuffers.DrawRegion.OPAQUE),
                     describeFirstDraw(commands, LodFrameBuffers.DrawRegion.TRANSLUCENT),
@@ -162,6 +201,7 @@ final class LodReadbackProbe {
             closeQuietly(colorReadback);
             closeQuietly(commandReadback);
             closeQuietly(controlReadback);
+            closeQuietly(stencilReadback);
         }
     }
 
@@ -214,9 +254,9 @@ final class LodReadbackProbe {
                 + " cameraSub=(" + b.getFloat(cam) + ", " + b.getFloat(cam + 4) + ", " + b.getFloat(cam + 8) + ")";
     }
 
-    private static void copyToHost(GameVulkan.Snapshot game, long colorImage, int width, int height,
+    private static void copyToHost(GameVulkan.Snapshot game, long colorImage, long depthImage, int width, int height,
                                    LodFrameBuffers slot, GpuBuffer colorReadback, GpuBuffer commandReadback,
-                                   GpuBuffer controlReadback, long commandBytes) {
+                                   GpuBuffer controlReadback, GpuBuffer stencilReadback, long commandBytes) {
         long pool = 0;
         try (MemoryStack stack = stackPush()) {
             VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
@@ -249,6 +289,12 @@ final class LodReadbackProbe {
                     VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(commandBytes));
             vkCmdCopyBuffer(cb, slot.drawControl().handle(), controlReadback.handle(),
                     VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(CONTROL_BYTES));
+            VkBufferImageCopy.Buffer stencilRegion = VkBufferImageCopy.calloc(1, stack)
+                    .bufferOffset(0).bufferRowLength(0).bufferImageHeight(0);
+            stencilRegion.imageSubresource().aspectMask(VK_IMAGE_ASPECT_STENCIL_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+            stencilRegion.imageOffset().set(0, 0, 0);
+            stencilRegion.imageExtent().set(width, height, 1);
+            vkCmdCopyImageToBuffer(cb, depthImage, VK_IMAGE_LAYOUT_GENERAL, stencilReadback.handle(), stencilRegion);
 
             VkMemoryBarrier.Buffer hostBarrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)

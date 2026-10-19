@@ -18,6 +18,8 @@
 layout(location=0) flat out uvec4 interData;
 layout(location=1) out vec2 uv;
 layout(location=2) out float fogDistance;
+// Position-derived level is valid for opaque and translucent materials alike.
+layout(location=3) flat out uint lodLevel;
 
 
 #ifdef TAA_PATCH
@@ -33,6 +35,7 @@ void main() {
 
     QuadData quad;
     uvec2 pos = positionBuffer[gl_InstanceIndex];
+    lodLevel = getLoDLevel(pos);
     setupQuad(quad, quadData[uint(gl_VertexIndex)>>2], pos, (gl_VertexIndex&3)==1);
 
     uint cornerId = uint(gl_VertexIndex)&3u;

@@ -9,6 +9,7 @@
     "FrontendGpuDeviceAccessor",
     "VulkanDeviceAccessor",
     "FrontendRenderPassAccessor",
+    "MixinFrontendRenderPass",
     "VulkanRenderPassAccessor",
     "StairBlockAccessor",
     "SpriteContentsAccessor",

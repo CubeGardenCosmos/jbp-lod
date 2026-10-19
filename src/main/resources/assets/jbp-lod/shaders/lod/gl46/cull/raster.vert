@@ -9,6 +9,11 @@
 #import <jbp-lod:lod/gl46/bindings.glsl>
 #import <jbp-lod:util/depthutils.glsl>
 
+// Immutable pre-raster snapshot: fragments write binding 2 while later vertices may still run.
+layout(set=0, binding=4, std430) restrict readonly buffer PreviousVisibilityBuffer {
+    uint previousVisibilityData[];
+};
+
 layout(location=0) flat out uint id;
 layout(location=1) flat out uint value;
 
@@ -46,7 +51,7 @@ void main() {
 
     //Encode whether the section was visible in the previous frame for temporal rendering.
     id = sid;
-    uint previous = visibilityData[sid]&0x7fffffffu;
+    uint previous = previousVisibilityData[sid]&0x7fffffffu;
     bool wasVisibleLastFrame = previous==(frameId-1u);
     value = (frameId&0x7fffffffu)|(uint(wasVisibleLastFrame)<<31);
 }

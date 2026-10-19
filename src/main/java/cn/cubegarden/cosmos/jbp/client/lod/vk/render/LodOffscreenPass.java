@@ -3,6 +3,7 @@ package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameContext;
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.bridge.GameVulkan;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.GpuBuffer;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
@@ -14,7 +15,7 @@ import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
 
 /**
- * Owned LOD scopes followed by a depth-tested composite in the game's already-active CUTOUT scope.
+ * Owned LOD scopes followed by an owned composite scope after the game's CUTOUT scope closes.
  * Every image, uniform and descriptor is indexed by the retired LOD frame slot. The owner must keep
  * this pass alive until both the pre-pass submission and the game's composite submission retire.
  */
@@ -115,15 +116,44 @@ final class LodOffscreenPass implements AutoCloseable {
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | LodRenderBarriers.DEPTH_ATTACHMENT_ACCESS);
     }
 
-    /** No rendering-scope changes or barriers are legal here: the game owns the active scope. */
-    void recordComposite(VkCommandBuffer commandBuffer, int slot, LodFrameContext context,
+    /** Called only after the frontend CUTOUT pass has closed its backend dynamic-rendering scope. */
+    void recordComposite(VkCommandBuffer commandBuffer, int slot, LodFrameContext context, LodFrameTargets targets,
                          LodDepthConversion gameDepth, LodDepthConversion lodDepth) {
         gameDepth.writeVec4(params[slot].mappedBytes(), 0);
         lodDepth.writeVec4(params[slot].mappedBytes(), LodDepthConversion.BYTE_SIZE);
         params[slot].flush(0, 32);
+        // Snapshotting vanilla depth and its sampled-read barrier happen before this scope. Never
+        // clear borrowed attachments: preserve Sodium's current color/depth and depth-test the LOD.
+        LodRenderBarriers.memory(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | LodRenderBarriers.DEPTH_TEST_STAGES,
+                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                        | LodRenderBarriers.DEPTH_ATTACHMENT_ACCESS);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkRenderingAttachmentInfo.Buffer color = VkRenderingAttachmentInfo.calloc(1, stack).sType$Default()
+                    .imageView(targets.color().imageView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            VkRenderingAttachmentInfo depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
+                    .imageView(targets.depth().imageView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default().layerCount(1)
+                    .pColorAttachments(color).pDepthAttachment(depth);
+            if (VulkanLodPipeline.hasStencil(targets.depth().vkFormat())) {
+                rendering.pStencilAttachment(depth);
+            }
+            rendering.renderArea().offset().set(context.renderAreaX(), context.renderAreaY());
+            rendering.renderArea().extent().set(context.renderAreaWidth(), context.renderAreaHeight());
+            vkCmdBeginRenderingKHR(commandBuffer, rendering);
+        }
         composite.bind(commandBuffer, slot, context.renderAreaX(), context.renderAreaY(),
                 context.renderAreaWidth(), context.renderAreaHeight());
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdEndRenderingKHR(commandBuffer);
+        LodRenderBarriers.memory(commandBuffer,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | LodRenderBarriers.DEPTH_TEST_STAGES,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
     @Override public void close() {

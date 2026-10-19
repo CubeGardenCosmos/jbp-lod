@@ -6,7 +6,7 @@ import java.util.Optional;
 /**
  * Opt-in diagnostic colour views of LOD quad fragments, selected with {@code -Djbp.lod.debugView=<name>}.
  * Each non-{@link #OFF} view replaces the shaded fragment colour with a per-fragment attribute so
- * geometry, UV, face, model and depth problems can be told apart on screen. The fragment shader selects
+ * geometry, UV, face, model, depth and coverage problems can be told apart on screen. The fragment shader selects
  * the view through the {@code LOD_DEBUG_VIEW} define carrying {@link #shaderCode()}.
  */
 public enum LodDebugView {
@@ -20,7 +20,21 @@ public enum LodDebugView {
     /** Block model id as a categorical colour. */
     MODEL(4),
     /** Raw fragment depth (gl_FragCoord.z) as grey. */
-    DEPTH(5);
+    DEPTH(5),
+    /** Actual packed section LOD level, including translucent geometry, as a categorical colour. */
+    LEVEL(6),
+    /** Actual draw phase: previous opaque red, temporal opaque green, translucent blue. */
+    PASS(7),
+    /**
+     * Bounding-depth predicate: red would be discarded, green would survive. Bypasses only that
+     * discard; alpha, tile, depth and stencil rejection still apply.
+     */
+    BOUND(8),
+    /**
+     * Green marks surviving LOD fragments, not sampled stencil values. Fixed-function stencil rejects
+     * cannot be shown by this shader; this is not a full-screen stencil attachment visualizer.
+     */
+    STENCIL(9);
 
     public static final String PROPERTY = "jbp.lod.debugView";
 

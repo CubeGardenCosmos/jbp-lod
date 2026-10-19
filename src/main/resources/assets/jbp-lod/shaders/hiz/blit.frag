@@ -8,11 +8,9 @@ layout(location = 0) out vec4 colour;
 #endif
 
 void main() {
+    // No FAR->NEAR hole patch: FAR texels (sky, or unwritten LOD depth) stay the farthest value, so a tile over
+    // sky is never reported as a nearer occluder. Matches hiz.comp, which reduces without patching.
     vec4 depths = textureGather(depthTex, uv, 0);
-    bvec4 isFar = equal(vec4(FAR), depths);
-    if (any(isFar)) {
-        depths = mix(vec4(NEAR), depths, isFar);
-    }
     float reduced = REDUCTION(REDUCTION(depths.x, depths.y), REDUCTION(depths.z, depths.w));
 
 #ifdef OUTPUT_COLOUR

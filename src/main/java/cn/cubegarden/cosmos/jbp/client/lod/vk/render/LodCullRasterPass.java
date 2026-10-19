@@ -9,6 +9,7 @@ import cn.cubegarden.cosmos.jbp.client.lod.vk.gpu.LodFrameBuffers;
 import cn.cubegarden.cosmos.jbp.client.lod.vk.shader.ShaderCompiler;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
 
@@ -25,6 +26,8 @@ import static org.lwjgl.vulkan.VK10.VK_INDEX_TYPE_UINT16;
 import static org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer;
 import static org.lwjgl.vulkan.VK10.vkCmdDrawIndexedIndirect;
 
+import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK13.*;
 /**
  * Upstream occlusion-test raster ({@code cull/raster.vert|frag}): one instanced AABB cube per
  * traversal-selected section, depth-tested (read-only) against the LOD depth target; fragments
@@ -36,6 +39,7 @@ final class LodCullRasterPass implements AutoCloseable {
     static final int SECTION_METADATA_BINDING = 1;
     static final int VISIBILITY_BINDING = 2;
     static final int INDIRECT_LOOKUP_BINDING = 3;
+    static final int PREVIOUS_VISIBILITY_BINDING = 4;
     private static final int CULL_COMMAND_STRIDE = 20;
 
     private final VulkanLodPipeline pipeline;
@@ -61,11 +65,27 @@ final class LodCullRasterPass implements AutoCloseable {
         int frameSlot = slot.slotIndex();
         GpuBuffer scene = slot.sceneUniform();
         GpuBuffer lookup = slot.indirectSectionLookup();
+        GpuBuffer previousVisibility = slot.visibility();
+        // Vertex and fragment invocations of a draw are not ordered against one another.
+        // Read last frame from a separate immutable buffer, never from the fragment output.
+        LodRenderBarriers.memory(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            vkCmdCopyBuffer(commandBuffer, visibility.handle(), previousVisibility.handle(),
+                    VkBufferCopy.calloc(1, stack).size(visibility.capacity()));
+        }
+        LodRenderBarriers.memory(commandBuffer, VK_PIPELINE_STAGE_2_COPY_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         pipeline.writeBuffer(frameSlot, SCENE_BINDING, scene.handle(), 0, scene.capacity());
         pipeline.writeBuffer(frameSlot, SECTION_METADATA_BINDING, sectionMetadata.handle(), 0,
                 sectionMetadata.capacity());
         pipeline.writeBuffer(frameSlot, VISIBILITY_BINDING, visibility.handle(), 0, visibility.capacity());
         pipeline.writeBuffer(frameSlot, INDIRECT_LOOKUP_BINDING, lookup.handle(), 0, lookup.capacity());
+        pipeline.writeBuffer(frameSlot, PREVIOUS_VISIBILITY_BINDING, previousVisibility.handle(), 0,
+                previousVisibility.capacity());
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkRenderingAttachmentInfo depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default()

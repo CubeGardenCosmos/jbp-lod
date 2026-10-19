@@ -42,6 +42,28 @@ class LodCompositeDepthTest {
         assertEquals(game.depthAtDistance(256), lod.convertTo(game, lod.depthAtDistance(256)), 1e-6);
     }
 
+    @Test
+    void boundingDepthRejectsOnlyFragmentsCloserThanTheLoadedVolumeExit() {
+        for (boolean reverse : new boolean[]{false, true}) {
+            LodDepthConversion lod = perspective(16, 48000, reverse, true);
+            double bound = lod.depthAtDistance(128);
+            double inside = lod.depthAtDistance(64);
+            double outside = lod.depthAtDistance(256);
+            // CPU reference of depthutils.glsl DEPTH_SCALAR_COMPARE(fragmentDepth, bound).
+            assertTrue(reverse ? inside > bound : inside < bound);
+            assertFalse(reverse ? outside > bound : outside < bound);
+            assertFalse(reverse ? bound > bound : bound < bound, "equality must survive the strict gate");
+
+            // LodBoundingPass uses the opposite of FAR as its clear value. Pixels not covered by
+            // a built-section cube must never reject a valid fragment, including depth endpoints.
+            double untouched = reverse ? 1.0 : 0.0;
+            for (double fragment : new double[]{0.0, inside, bound, outside, 1.0}) {
+                assertFalse(reverse ? fragment > untouched : fragment < untouched,
+                        "an untouched bounding pixel cannot exclude LOD");
+            }
+        }
+    }
+
     private static LodDepthConversion perspective(double near, double far, boolean reverse, boolean zeroToOne) {
         double n = reverse ? far : near;
         double f = reverse ? near : far;

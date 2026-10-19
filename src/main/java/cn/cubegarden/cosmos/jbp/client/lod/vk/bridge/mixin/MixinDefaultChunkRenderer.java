@@ -78,7 +78,7 @@ public abstract class MixinDefaultChunkRenderer {
         }
     }
 
-    /** Inside the still-open CUTOUT dynamic-rendering scope, after Sodium's draws and before it ends. */
+    /** After Sodium's draws, defer LOD composition until this frontend pass really closes. */
     @Inject(method = "render", at = @At(value = "INVOKE",
             target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/ShaderChunkRenderer;end(Lnet/caffeinemc/mods/sodium/client/render/chunk/terrain/TerrainRenderPass;)V",
             shift = At.Shift.BEFORE))
@@ -102,7 +102,7 @@ public abstract class MixinDefaultChunkRenderer {
             if (VulkanBridgeProbe.enabled()) {
                 VulkanBridgeProbe.insideCutout(renderPass, pass, probeFrame);
             }
-            VulkanLodRenderer.drawCutout(lodFrame);
+            VulkanLodRenderer.deferCutout(pass, lodFrame);
         }
     }
 }

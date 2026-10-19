@@ -8,7 +8,9 @@ package cn.cubegarden.cosmos.jbp.client.lod.api;
  * render scope's extent/sample count, and have producer writes visible to the supplied command
  * buffer. The provider owns any barriers, queue-family ownership transfers, and external graph
  * hand-off needed before this callback. JBP-LOD does not transition provider-owned images while
- * rendering is active. Handles and matrices are frame-scoped and must not be retained.</p>
+ * rendering is active. Handles and matrices remain valid through CUTOUT close: JBP-LOD then
+ * samples vanilla depth and opens an owned LOAD/STORE composite scope using the same attachments
+ * and command buffer. The provider must allow that hand-off; nothing is retained across frames.</p>
  *
  * <p>The initial implementation installs only the vanilla Sodium provider. Implementing this
  * interface does not imply shaderpack support.</p>

@@ -3,9 +3,9 @@ package cn.cubegarden.cosmos.jbp.client.lod.api;
 import java.util.Objects;
 
 /**
- * Borrowed targets, matrices, and fog parameters for one LOD draw. Instances are valid only for
- * the recording scope identified here; providers and consumers must not retain image/view handles
- * after that scope or across frames.
+ * Borrowed targets, matrices, and fog parameters for one LOD draw. Instances remain valid through
+ * the identified CUTOUT pass's close callback, where vanilla depth is captured before an owned
+ * composite scope loads these attachments. Handles must not be retained across game frames.
  */
 public record LodFrameTargets(
         ImageTarget color,
@@ -30,10 +30,11 @@ public record LodFrameTargets(
 
     /**
      * Vulkan image metadata supplied by the owning render-target provider. Layouts are the
-     * layouts already established for this draw and after it; JBP-LOD does not transition a
-     * borrowed image while a render scope is active. {@code sampled} states that the image was
-     * created with sampled-image usage; the depth target must be sampleable because LOD occlusion
-     * culling re-expresses its previous-frame contents in the LOD projection's depth range.
+     * layouts already established for this draw and after it; JBP-LOD leaves borrowed images in
+     * those layouts. The provider keeps them alive through the CUTOUT close callback and permits
+     * a subsequent owned LOAD/STORE composite scope on the same command buffer. {@code sampled}
+     * states that the depth image supports sampling for the vanilla-only snapshot, captured after
+     * CUTOUT closes and before LOD composition, rather than sampling the final game depth next frame.
      */
     public record ImageTarget(
             long image,

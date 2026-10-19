@@ -20,15 +20,30 @@ class LodReadbackProbeTest {
     }
 
     @Test
-    void enabledProbeFiresOnceAfterWarmup() {
+    void enabledProbeSamplesAfterWarmupEvery120FramesUpToCap() {
         LodReadbackProbe probe = new LodReadbackProbe(true);
-        for (int i = 1; i < LodReadbackProbe.WARMUP_FRAMES; i++) {
-            assertFalse(probe.tick(), "frame " + i + " fired before warmup ended");
+        java.util.List<Integer> fired = new java.util.ArrayList<>();
+        for (int i = 1; i <= LodReadbackProbe.WARMUP_FRAMES + 10 * LodReadbackProbe.SAMPLE_INTERVAL_FRAMES; i++) {
+            if (probe.tick()) {
+                fired.add(i);
+            }
         }
-        assertTrue(probe.tick());
-        for (int i = 0; i < 50; i++) {
-            assertFalse(probe.tick());
-        }
+        assertEquals(java.util.List.of(120, 240, 360, 480), fired);
+        assertEquals(LodReadbackProbe.MAX_SAMPLES, fired.size());
+    }
+
+    @Test
+    void summarizesSeedStencilSkyAndVanillaCounts() {
+        ByteBuffer stencil = ByteBuffer.allocate(6).put((byte) 1).put((byte) 1).put((byte) 0)
+                .put((byte) 1).put((byte) 0).put((byte) 2);
+        stencil.flip();
+        LodReadbackProbe.StencilStats stats = LodReadbackProbe.summarizeStencil(stencil, 6);
+
+        assertEquals(3, stats.sky());
+        assertEquals(2, stats.vanilla());
+        assertEquals(1, stats.other());
+        assertEquals(6, stats.pixels());
+        assertEquals(2.0 / 6.0, stats.vanillaShare(), 1e-12);
     }
 
     @Test

@@ -3,6 +3,7 @@
 layout(location=0) flat in uvec4 interData;
 layout(location=1) in vec2 uv;
 layout(location=2) in float fogDistance;
+layout(location=3) flat in uint lodLevel;
 
 
 #ifndef PATCHED_SHADER
@@ -89,13 +90,14 @@ vec4 applyLodFog(vec4 sourceColour) {
 
 
 // Diagnostic colours selected by LOD_DEBUG_VIEW (LodDebugView.java; codes must match):
-// 1 normal, 2 uv, 3 face, 4 model, 5 depth. Output replaces shading and fog; discards above still apply.
+// 1 normal, 2 uv, 3 face, 4 model, 5 depth, 6 level, 7 pass, 8 bound, 9 stencil.
+// Output replaces shading/fog. Only bound bypasses bounding-depth discard; all other tests remain.
 #ifdef LOD_DEBUG_VIEW
 vec3 categorical(float t) {
     return 0.5 + 0.5 * cos(6.2831853 * (vec3(t) + vec3(0.0, 0.33, 0.67)));
 }
 
-vec3 lodDebugColour() {
+vec3 lodDebugColour(bool outsideBound) {
     if (LOD_DEBUG_VIEW == 1) {
         uint face = getFace();
         uint axis = face >> 1u;
@@ -111,6 +113,28 @@ vec3 lodDebugColour() {
     }
     if (LOD_DEBUG_VIEW == 4) {
         return categorical(fract(float(getModelId()) * 0.6180339887));
+    }
+    if (LOD_DEBUG_VIEW == 6) {
+        // Decode in the vertex shader from the actual section position, not opaque-only colour bits.
+        return categorical(float(lodLevel) / 8.0);
+    }
+    #if LOD_DEBUG_VIEW == 7
+    // A separate fragment variant tags each actual pipeline phase, not gl_FrontFacing or material.
+    #if LOD_DRAW_PASS == 0
+    return vec3(1.0, 0.0, 0.0); // Previous-frame opaque.
+    #elif LOD_DRAW_PASS == 1
+    return vec3(0.0, 1.0, 0.0); // Current temporal opaque.
+    #elif LOD_DRAW_PASS == 2
+    return vec3(0.0, 0.0, 1.0); // Current translucent.
+    #endif
+    #endif
+    if (LOD_DEBUG_VIEW == 8) {
+        return outsideBound ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    }
+    if (LOD_DEBUG_VIEW == 9) {
+        // NOT a stencil readback: only fragments surviving fixed-function stencil/depth can appear.
+        // Rejected pixels retain the underlying scene; green does not reveal the stored stencil value.
+        return vec3(0.0, 1.0, 0.0);
     }
     return vec3(gl_FragCoord.z);
 }
@@ -156,13 +180,17 @@ void main() {
     }
     #endif
 
-    if (DEPTH_SCALAR_COMPARE(gl_FragCoord.z, texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r)) {
+    bool outsideBound = DEPTH_SCALAR_COMPARE(gl_FragCoord.z,
+            texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r);
+    #if !defined(LOD_DEBUG_VIEW) || LOD_DEBUG_VIEW != 8
+    if (outsideBound) {
         discard;
     }
+    #endif
 
     #ifndef PATCHED_SHADER
     #if defined(LOD_DEBUG_VIEW)
-    outColour = vec4(lodDebugColour(), 1.0);
+    outColour = vec4(lodDebugColour(outsideBound), 1.0);
     #elif defined(DEBUG_SOLID)
     outColour = vec4(1.0, 0.0, 1.0, 1.0);
     #else

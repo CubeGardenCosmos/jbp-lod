@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 import static cn.cubegarden.cosmos.jbp.client.lod.compute.SyncBatch.COMPUTE;
 import static cn.cubegarden.cosmos.jbp.client.lod.compute.SyncBatch.DRAW_INDIRECT;
 import static cn.cubegarden.cosmos.jbp.client.lod.compute.SyncBatch.FRAGMENT;
@@ -143,7 +144,8 @@ public final class LodComputeExecutor implements AutoCloseable {
         long nodeVisibilityBytes = (long) nodeCapacity * Integer.BYTES;
         long sectionVisibilityBytes = (long) sectionCapacity * Integer.BYTES;
         visibility = track(created, GpuBuffer.allocate(game, nodeVisibilityBytes, storage, false));
-        sectionVisibility = track(created, GpuBuffer.allocate(game, sectionVisibilityBytes, storage, false));
+        sectionVisibility = track(created, GpuBuffer.allocate(game, sectionVisibilityBytes,
+                storage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false));
         queueMetadata = new GpuBuffer[framesInFlight];
         visibilityOps = new GpuBuffer[framesInFlight];
         cleanerOutput = new GpuBuffer[framesInFlight];

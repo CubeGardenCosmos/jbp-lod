@@ -5,8 +5,9 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import java.util.Objects;
 
 /**
- * Per-recording-scope input to a {@link LodExternalTargetsProvider}. The command buffer and
- * vanilla targets are borrowed and valid only during the callback on the render thread.
+ * Per-frame input to a {@link LodExternalTargetsProvider}. The command buffer and vanilla targets
+ * are borrowed through the CUTOUT close callback on the render thread. {@code dynamicRenderingActive}
+ * describes the provider-capture point, not the later owned snapshot/composite recording scopes.
  */
 public record LodFrameContext(
         long frameNumber,
