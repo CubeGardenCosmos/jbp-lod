@@ -38,6 +38,8 @@ dependencies {
     compileOnly "org.lwjgl:lwjgl-shaderc:${project.lwjgl_version}"
     compileOnly "org.lwjgl:lwjgl-spvc:${project.lwjgl_version}"
     compileOnly "org.lwjgl:lwjgl-vma:${project.lwjgl_version}"
+    //Type annotations referenced by Minecraft class files (e.g. PalettedContainerRO) must resolve at compile time.
+    compileOnly "org.jspecify:jspecify:1.0.0"
     include implementation("org.rocksdb:rocksdbjni:10.2.1")
 
     testImplementation platform('org.junit:junit-bom:5.14.4')

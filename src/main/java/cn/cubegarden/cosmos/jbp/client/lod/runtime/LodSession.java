@@ -1,6 +1,8 @@
 package cn.cubegarden.cosmos.jbp.client.lod.runtime;
 
 import cn.cubegarden.cosmos.jbp.client.lod.data.IdMapper;
+import cn.cubegarden.cosmos.jbp.client.lod.data.ingest.VoxelHierarchyWriter;
+import cn.cubegarden.cosmos.jbp.client.lod.importing.WorldImporter;
 import cn.cubegarden.cosmos.jbp.client.lod.data.tree.LodNodeService;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import org.slf4j.Logger;
@@ -11,6 +13,8 @@ import cn.cubegarden.cosmos.jbp.client.lod.storage.LodStorageSession;
 import cn.cubegarden.cosmos.jbp.client.lod.storage.StoredSectionMeshProvider;
 
 import java.io.IOException;
+import net.minecraft.core.RegistryAccess;
+
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +55,8 @@ public final class LodSession {
     private final LodStorageService storage;
     private final LodNodeService nodes;
     private final StoredSectionMeshProvider sections;
+    private final VoxelHierarchyWriter hierarchy;
+    private volatile WorldImporter worldImporter;
     private final ExecutorService meshExecutor;
     private final RenderDistanceTracker distanceTracker;
     private final IdMapper mapper;
@@ -108,6 +114,17 @@ public final class LodSession {
             throw failure;
         }
         this.sections.bind(nodes);
+        this.hierarchy = new VoxelHierarchyWriter(new VoxelHierarchyWriter.Store() {
+            @Override
+            public byte[] get(long key) {
+                return storage.getSectionData(key).join();
+            }
+
+            @Override
+            public void put(long key, byte[] encoded) {
+                storage.setSectionData(key, encoded).join();
+            }
+        }, nodes::onSectionUpdated, mapper::getBlockStateOpacity);
         this.mesher = new cn.cubegarden.cosmos.jbp.client.lod.compute.SectionMesher(models, storage);
         this.sections.setMesher(mesher);
         this.distanceTracker = new RenderDistanceTracker(TOP_LEVEL_OPERATIONS_PER_FRAME, minSec, maxSec,
@@ -172,6 +189,35 @@ public final class LodSession {
         return nodes;
     }
 
+    /** Shared serialized hierarchy writer used by live capture and the background world importer. */
+    public VoxelHierarchyWriter hierarchyWriter() {
+        return hierarchy;
+    }
+
+    /** The latest background world importer, or null when none was started. */
+    public WorldImporter worldImporter() {
+        return worldImporter;
+    }
+
+    /**
+     * Starts importing the given dimension's region directory on dedicated daemon threads. Returns the
+     * running importer when one is already active; otherwise the new importer. Safe to call from the game
+     * thread: no file I/O or NBT decoding happens here.
+     */
+    public synchronized WorldImporter startWorldImport(Path regionDirectory, RegistryAccess registries) {
+        if (closing) {
+            throw new IllegalStateException("session is closing");
+        }
+        WorldImporter current = this.worldImporter;
+        if (current != null && current.state() == WorldImporter.State.RUNNING) {
+            return current;
+        }
+        WorldImporter importer = new WorldImporter(this, regionDirectory, registries);
+        this.worldImporter = importer;
+        importer.start();
+        return importer;
+    }
+
     /** Persistent block-state/biome id mapping (also the model bakery's block-state source). */
     public IdMapper mapper() {
         return mapper;
@@ -217,6 +263,7 @@ public final class LodSession {
      */
     public synchronized void closeNow() throws java.io.IOException {
         closing = true;
+        closeImporter();
         sections.close();
         nodes.close();
         meshExecutor.shutdownNow();
@@ -243,9 +290,22 @@ public final class LodSession {
         meshExecutor.shutdownNow();
         statsLogger.shutdownNow();
         closingFuture = ingestDrain.handle((unused, failure) -> null).thenCompose(unused -> {
+            closeImporter();
             nodes.close();
             return storage.closeAsync();
         });
         return closingFuture;
+    }
+
+    /**
+     * Stops the importer without waiting on it. Its already-queued storage operations precede the close
+     * operation on the single I/O executor; later writes fail with {@link java.util.concurrent.CancellationException}
+     * and end the worker, so neither the render thread nor the I/O executor blocks on it.
+     */
+    private void closeImporter() {
+        WorldImporter importer = this.worldImporter;
+        if (importer != null) {
+            importer.cancel();
+        }
     }
 }

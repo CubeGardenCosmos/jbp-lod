@@ -16,6 +16,8 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +44,8 @@ public final class JbpLodClient implements ClientModInitializer {
     private static final ReflectiveNodeIdProvider NODE_ID_PROVIDER = new ReflectiveNodeIdProvider();
     private static final Set<LodScopeManager.Status> REPORTED_INACTIVE = EnumSet.noneOf(LodScopeManager.Status.class);
     private static final long SHUTDOWN_WAIT_SECONDS = 15;
+    /** Dev convenience: import the current single-player dimension at session open. */
+    public static final String IMPORT_WORLD_PROPERTY = "jbp.lod.importWorld";
     private static final ExecutorService STORAGE_IO = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "JBP-LOD Storage IO");
         thread.setDaemon(true);
@@ -75,6 +79,7 @@ public final class JbpLodClient implements ClientModInitializer {
         ModelProvider.registerLifecycle();
         VulkanLodRenderer.registerLifecycle();
         LiveChunkCapture.register();
+        LodCommands.register();
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.level != sessionLevel) {
                 if (client.level == null) stopSession("world unloaded");
@@ -97,7 +102,8 @@ public final class JbpLodClient implements ClientModInitializer {
 
     private record StartRequest(boolean singleplayer, boolean developmentEnvironment, String developmentScopeId,
                                 String developmentNodeId, String worldId, String nodeId, String configuredBase,
-                                Path gameDirectory, String dimension, int minSection, int maxSection) {
+                                Path gameDirectory, String dimension, int minSection, int maxSection,
+                                Path importRegionDirectory, RegistryAccess importRegistries) {
     }
 
     private static void startSession(Minecraft client) {
@@ -138,9 +144,20 @@ public final class JbpLodClient implements ClientModInitializer {
             maxSection = (client.level.getMaxSectionY() - 1) >> 5;
         }
 
+        //Auto-import is opt-in and resolved on the game thread; the importer does all I/O on its own threads.
+        Path importRegionDirectory = null;
+        RegistryAccess importRegistries = null;
+        boolean importWorld = "true".equalsIgnoreCase(
+                String.valueOf(systemProperty(IMPORT_WORLD_PROPERTY)).trim());
+        if (importWorld && singleplayer && client.level != null) {
+            importRegionDirectory = DimensionType.getStorageFolder(client.level.dimension(),
+                    integratedServer.getWorldPath(LevelResource.ROOT)).resolve("region");
+            importRegistries = client.level.registryAccess();
+        }
+
         StartRequest request = new StartRequest(singleplayer, developmentEnvironment, developmentScopeId,
                 developmentNodeId, worldId, nodeId, configuredBase(), FabricLoader.getInstance().getGameDir(),
-                dimension, minSection, maxSection);
+                dimension, minSection, maxSection, importRegionDirectory, importRegistries);
         pendingRelease.handle((ignored, failure) -> null)
                 .thenRun(() -> STORAGE_IO.execute(() -> openOnStorageThread(request, token)));
     }
@@ -214,6 +231,13 @@ public final class JbpLodClient implements ClientModInitializer {
         }
         LOGGER.info("[JBP-LOD] LOD storage session {} open for world '{}' at {}.", session.generation(),
                 request.dimension(), session.worldDirectory());
+        if (request.importRegionDirectory() != null && request.importRegistries() != null) {
+            try {
+                session.startWorldImport(request.importRegionDirectory(), request.importRegistries());
+            } catch (RuntimeException failure) {
+                LOGGER.warn("[JBP-LOD] Could not start the automatic world import.", failure);
+            }
+        }
     }
 
     private static void closeStaleStorage(LodStorageSession storageSession) {

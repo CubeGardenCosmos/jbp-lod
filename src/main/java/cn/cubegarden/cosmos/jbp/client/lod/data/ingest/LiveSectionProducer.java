@@ -10,7 +10,6 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.LoggerFactory;
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,12 +21,16 @@ import java.util.concurrent.Executors;
  */
 public final class LiveSectionProducer {
     private final LodSession session;
+    private final VoxelHierarchyWriter hierarchy;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "JBP-LOD voxel ingest"); thread.setDaemon(true); return thread;
     });
     private final CaptureAdmission admission = new CaptureAdmission(CaptureAdmission.MAX_PENDING_SECTIONS);
     private static final org.slf4j.Logger LOGGER = LoggerFactory.getLogger("jbp-lod");
-    public LiveSectionProducer(LodSession session) { this.session = session; }
+    public LiveSectionProducer(LodSession session) {
+        this.session = session;
+        this.hierarchy = session.hierarchyWriter();
+    }
 
     /**
      * Called only on the game thread; no live mutable chunk state escapes this method. Each non-empty section is
@@ -95,29 +98,7 @@ public final class LiveSectionProducer {
 
     private void writeHierarchy(int x, int y, int z, long[] source) {
         int sectionX = x, sectionY = y, sectionZ = z;
-        for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
-            long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
-            byte[] stored = session.storage().getSectionData(key).join();
-            long[] target = stored == null ? new long[StoredVoxelSection.VOXELS] : StoredVoxelSection.decode(stored);
-            long[] before = stored == null ? null : target.clone();
-            VoxelHierarchy.insert(target, source, level, sectionX, sectionY, sectionZ);
-            //Unchanged levels skip the write and every notification: no watched node can see different voxels.
-            if (before == null || !Arrays.equals(before, target)) {
-                session.storage().setSectionData(key, StoredVoxelSection.encode(target)).join();
-                byte children = VoxelHierarchy.children(target);
-                if (level == 0 && children != 0) children = (byte) 0xFF;
-                session.nodes().onSectionUpdated(key, SectionPos.DEFAULT_UPDATE_FLAGS, children);
-                int sx = x >> 1, sy = y >> 1, sz = z >> 1;
-                for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
-                    long adjacent = SectionPos.pack(level, sx + (axis == 0 ? sign : 0),
-                            sy + (axis == 1 ? sign : 0), sz + (axis == 2 ? sign : 0));
-                    session.nodes().onSectionUpdated(adjacent, SectionPos.UPDATE_TYPE_BLOCK_BIT, (byte) 0);
-                }
-            }
-            if (level < SectionPos.MAX_LOD_LAYER)
-                source = VoxelHierarchy.downsample(source, 16 >> level, session.mapper()::getBlockStateOpacity);
-            x >>= 1; y >>= 1; z >>= 1;
-        }
+        this.hierarchy.write(x, y, z, source);
         if (ActivationLog.first("stored")) {
             LOGGER.info("[JBP-LOD] First section hierarchy stored: {} levels from section {}.",
                     SectionPos.MAX_LOD_LAYER + 1, SectionPos.pretty(SectionPos.pack(0, sectionX, sectionY, sectionZ)));
