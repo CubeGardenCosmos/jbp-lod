@@ -128,6 +128,44 @@ class SectionMesherTest {
         assertEquals(6, build(mesher, data).quadCount());
     }
 
+    @Test void productionSectionSourceReturnsFullSkyAirForAMissingStoredSection() {
+        var source = SectionMesher.sectionSource(key -> null);
+        assertSame(SectionMesher.missingSectionAir(), source.apply(123L));
+        long[] decoded = new long[32768];
+        decoded[7] = IdMapper.composeMappingId((byte) 4, 3, 0);
+        byte[] encoded = StoredVoxelSection.encode(decoded);
+        assertArrayEquals(decoded, SectionMesher.sectionSource(key -> encoded).apply(456L));
+    }
+
+    @Test void missingSectionFallbackIsAirAtFullSkyLight() {
+        long[] air = SectionMesher.missingSectionAir();
+        assertEquals(32768, air.length);
+        assertTrue(Arrays.stream(air).allMatch(word -> IdMapper.isAir(word)
+                && IdMapper.getLightId(word) == 15));
+    }
+
+    @Test void outerFacesTakeTheNeighbourSectionLightAndAMissingSectionIsFullSkyAir() {
+        long[] solid = new long[32768];
+        Arrays.fill(solid, voxel(1));
+        long[] fullSkyAir = new long[32768];
+        Arrays.fill(fullSkyAir, IdMapper.airWithLight(15));
+
+        BuiltSection lit = build(new SectionMesher(models(OPAQUE), key -> fullSkyAir), solid);
+        assertEquals(24, lit.quadCount());
+        var quads = ByteBuffer.wrap(lit.packedQuads()).order(ByteOrder.LITTLE_ENDIAN);
+        while (quads.hasRemaining()) {
+            assertEquals(15, (quads.getLong() >>> 55) & 0xFF,
+                    "a face against full-sky air must carry sky light 15, the upstream missing-section default");
+        }
+
+        BuiltSection dark = build(new SectionMesher(models(OPAQUE), key -> new long[32768]), solid);
+        quads = ByteBuffer.wrap(dark.packedQuads()).order(ByteOrder.LITTLE_ENDIAN);
+        while (quads.hasRemaining()) {
+            assertEquals(0, (quads.getLong() >>> 55) & 0xFF,
+                    "the pre-fix all-zero fallback produced the black boundary faces");
+        }
+    }
+
     @Test void stoneFilledSectionMeshesToNonzeroQuadsAndNonzeroMetadataThroughEncodedPath() {
         // A solid 32^3 stone section as the ingest path stores it, meshed through the same encode/mesh entry point
         long[] stone = new long[32768];

@@ -105,7 +105,7 @@ class VoxelHierarchyWriterTest {
         assertTrue(updates.isEmpty());
     }
 
-    @Test void firstAirWriteStoresEmptyPayloadAndSecondIsUnchanged() {
+    @Test void firstAirWriteStoresFullSkyAirOutsideTheChunkOctantAndSecondIsUnchanged() {
         MemoryStore store = new MemoryStore();
         var writer = new VoxelHierarchyWriter(store, (p, t, c) -> { }, word -> 15);
         assertTrue(writer.write(0, 0, 0, new long[4096]));
@@ -198,6 +198,32 @@ class VoxelHierarchyWriterTest {
         return words;
     }
 
+    @Test void newSectionsStartAsAirAtFullSkyLightOutsideTheInsertedOctant() {
+        MemoryStore store = new MemoryStore();
+        var writer = new VoxelHierarchyWriter(store, (p, t, c) -> { }, word -> 15);
+        long[] source = new long[4096];
+        Arrays.fill(source, IdMapper.airWithLight(15));
+        source[1 | (2 << 4) | (3 << 8)] = voxel(4, 15);
+        writer.write(0, 0, 0, source);
+
+        for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
+            long key = SectionPos.pack(level, 0, 0, 0);
+            long[] stored = StoredVoxelSection.decode(store.sections.get(key));
+            // chunk (0,0,0) occupies the low octant; its opposite corner was never written by this chunk.
+            long untouched = stored[31 | (31 << 5) | (31 << 10)];
+            assertTrue(IdMapper.isAir(untouched), "level " + level + " unwritten cell must be air");
+            assertEquals(IdMapper.airWithLight(15), untouched,
+                    "level " + level + " unwritten cell must carry upstream's full sky light");
+        }
+    }
+
+    @Test void emptySectionIsAirAtFullSkyLight() {
+        long[] section = VoxelHierarchy.emptySection();
+        assertEquals(StoredVoxelSection.VOXELS, section.length);
+        assertTrue(Arrays.stream(section).allMatch(word -> IdMapper.isAir(word)
+                && IdMapper.getLightId(word) == SkyLightFallback.FULL_SKY_LIGHT));
+    }
+
     /**
      * Verbatim behaviour of {@code LiveSectionProducer.writeHierarchy} at d807e529 (before the shared
      * {@link VoxelHierarchyWriter} extraction), used as the oracle for the regression test.
@@ -210,7 +236,7 @@ class VoxelHierarchyWriterTest {
         for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
             long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
             byte[] stored = store.get(key);
-            long[] target = stored == null ? new long[StoredVoxelSection.VOXELS]
+            long[] target = stored == null ? VoxelHierarchy.emptySection()
                     : StoredVoxelSection.decode(stored);
             long[] before = stored == null ? null : target.clone();
             VoxelHierarchy.insert(target, source, level, sectionX, sectionY, sectionZ);

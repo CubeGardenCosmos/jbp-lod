@@ -6,6 +6,7 @@ import cn.cubegarden.cosmos.jbp.client.lod.data.tree.BuiltSection;
 import cn.cubegarden.cosmos.jbp.client.lod.data.tree.SectionPos;
 import cn.cubegarden.cosmos.jbp.client.lod.model.ModelProvider;
 import cn.cubegarden.cosmos.jbp.client.lod.storage.LodStorageService;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,7 +15,36 @@ import java.util.function.LongFunction;
 
 /** Worker-side snapshot adapter for the sealed upstream RenderDataFactory algorithm. */
 public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.data.tree.SectionMesher {
-    private static final long[] AIR = new long[32 * 32 * 32];
+    /**
+     * Upstream {@code ActiveSectionTracker.acquire} fills a section whose storage load misses with
+     * {@code Mapper.composeMappingId((byte) 15, 0, 0)}: air at full sky light, never darkness. The mesher
+     * copies a face's light from the adjacent voxel, so a missing neighbour section must be bright air;
+     * an all-zero array here blackens every face on the boundary of the stored LoD region.
+     */
+    private static final long[] MISSING_SECTION_AIR = fullSkyAir();
+
+    /**
+     * Snapshot access for the mesher's neighbour sections (runs only on mesh workers). A stored section
+     * that does not exist becomes {@link #missingSectionAir()}, matching upstream {@code WorldEngine.acquire}.
+     */
+    static LongFunction<long[]> sectionSource(LongFunction<byte[]> encoded) {
+        return key -> {
+            byte[] raw = encoded.apply(key);
+            return raw == null ? MISSING_SECTION_AIR : StoredVoxelSection.decode(raw);
+        };
+    }
+
+    /** Read-only reference used for every absent neighbour section; never mutated by the mesher. */
+    static long[] missingSectionAir() {
+        return MISSING_SECTION_AIR;
+    }
+
+    private static long[] fullSkyAir() {
+        long[] air = new long[32 * 32 * 32];
+        Arrays.fill(air, IdMapper.airWithLight(15));
+        return air;
+    }
+
     /** Published model metadata only; no Vulkan operations occur on mesh workers. */
     public interface Models {
         int getModelId(int blockId);
@@ -59,11 +89,7 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
                 if (id < 0) throw new IllegalStateException("Published model lacks fluid model: " + modelId);
                 return id;
             }
-        }, key -> {
-            // This runs only on mesh workers, never on the game/render or storage executor.
-            byte[] raw = storage.getSectionData(key).join();
-            return raw == null ? AIR : StoredVoxelSection.decode(raw);
-        });
+        }, sectionSource(key -> storage.getSectionData(key).join()));
         epoch = provider.epoch();
         modelEpoch = provider::epoch;
     }

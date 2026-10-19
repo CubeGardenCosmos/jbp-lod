@@ -15,6 +15,10 @@ import java.util.function.LongToIntFunction;
  * Chunk parsing/voxelization stays parallel; only the storage read-modify-write (and its six
  * neighbour notifications per changed level) is serialized here.
  *
+ * <p>A section storage has never written starts as {@link VoxelHierarchy#emptySection()}: air at full
+ * sky light, matching upstream {@code ActiveSectionTracker.acquire}. Only the compact octant covered by
+ * this chunk is replaced, so chunks the capture has not reached stay bright air instead of sky-0 air.
+ *
  * <p>{@link Store} and {@link Updates} are synchronous: callers run them on a worker thread. The
  * production adapters block on the session's storage executor; tests use in-memory maps.
  */
@@ -57,7 +61,7 @@ public final class VoxelHierarchyWriter {
         for (int level = 0; level <= SectionPos.MAX_LOD_LAYER; level++) {
             long key = SectionPos.pack(level, x >> 1, y >> 1, z >> 1);
             byte[] stored = this.store.get(key);
-            long[] target = stored == null ? new long[StoredVoxelSection.VOXELS]
+            long[] target = stored == null ? VoxelHierarchy.emptySection()
                     : StoredVoxelSection.decode(stored);
             long[] before = stored == null ? null : target.clone();
             // insert derives the octant from the section's own chunk coordinates (level bits), not the

@@ -1,11 +1,25 @@
 package cn.cubegarden.cosmos.jbp.client.lod.data.ingest;
 
 import cn.cubegarden.cosmos.jbp.client.lod.data.IdMapper;
+import java.util.Arrays;
 import java.util.function.LongToIntFunction;
 
 /** Derived from sealed Voxy common/world/other/Mipper.java and WorldUpdater.java. */
 public final class VoxelHierarchy {
     private VoxelHierarchy() { }
+
+    /**
+     * A section that storage has never written: upstream {@code ActiveSectionTracker.acquire} creates it
+     * as {@code Mapper.composeMappingId((byte) 15, 0, 0)} (air at full sky light) before inserting the
+     * captured chunk octant. jbp's storage writer must use the same initial payload, otherwise every
+     * chunk-octant the capture has not reached is air at sky light 0 and blackens the faces next to it.
+     * Hot path: called once per captured chunk and level (not per voxel); callers own the array.
+     */
+    public static long[] emptySection() {
+        long[] section = new long[StoredVoxelSection.VOXELS];
+        Arrays.fill(section, IdMapper.airWithLight(SkyLightFallback.FULL_SKY_LIGHT));
+        return section;
+    }
 
     /** Upstream opacity-first selection, with x/y/z tie priority and air-light averaging. */
     public static long mip(long[] data, int base, int stride, LongToIntFunction opacity) {
