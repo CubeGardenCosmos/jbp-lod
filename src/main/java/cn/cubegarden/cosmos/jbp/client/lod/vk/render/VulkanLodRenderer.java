@@ -75,6 +75,8 @@ public final class VulkanLodRenderer {
     private static final VulkanLodRenderer INSTANCE = new VulkanLodRenderer();
     /** Process-wide once-only flag for the first recorded draw path log (render thread only). */
     private static boolean drawPathLogged;
+    /** Once-only log of the fog block the LOD shaders actually receive ({@code -Djbp.lod.debugFog}). */
+    private static boolean fogUniformLogged;
     /** Dev-script A/B toggle; release builds never set it. Volatile because the tick thread sets it. */
     private static volatile boolean devDrawEnabled = true;
 
@@ -190,6 +192,12 @@ public final class VulkanLodRenderer {
                     terrainPass, pass, camera, fog);
             LodExternalTargetsProvider provider = LodExternalTargets.currentOr(VanillaLodExternalTargetsProvider.INSTANCE);
             LodFrameTargets targets = provider.targetsFor(context);
+            if (!fogUniformLogged && Boolean.getBoolean("jbp.lod.debugFog")) {
+                fogUniformLogged = true;
+                LodFrameTargets.Fog lodFog = targets.fog();
+                LOGGER.info("[JBP-LOD] LOD fog uniform: start={} end={} color=({},{},{},{})",
+                        lodFog.start(), lodFog.end(), lodFog.red(), lodFog.green(), lodFog.blue(), lodFog.alpha());
+            }
 
             DeviceCaps deviceCaps = capabilities(game);
             LodTargetValidator.Result validation = LodTargetValidator.validate(context.dynamicRenderingActive(),
@@ -742,7 +750,8 @@ public final class VulkanLodRenderer {
                 written.add(LIGHTMAP_BINDING);
             }
             GpuBuffer fogBuffer = fog[index];
-            LodFogUniform.write(fogBuffer.mappedBytes(), 0, targets.matrices().modelView(), targets.fog());
+            LodFogUniform.write(fogBuffer.mappedBytes(), 0, targets.matrices().modelView(),
+                    LodFogPolicy.lodFog(enabled(), true, targets.fog()));
             fogBuffer.flush(0, LodFogUniform.BYTE_SIZE);
             bindBuffer(drawPipeline, index, FOG_BINDING, fogBuffer.handle(), LodFogUniform.BYTE_SIZE, written);
             Set<Integer> missing = drawPipeline.bindingNumbers();

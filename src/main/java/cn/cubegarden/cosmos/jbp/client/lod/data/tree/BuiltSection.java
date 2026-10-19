@@ -68,6 +68,11 @@ public final class BuiltSection {
         return this.quads == null ? 0 : this.quads.length / 8;
     }
 
+    /** Quads in the translucent face-order range (offset range 0); diagnostics and tests only. */
+    public int translucentQuadCount() {
+        return this.offsets == null ? 0 : this.offsets[1] - this.offsets[0];
+    }
+
     /** Defensive copy. */
     public byte[] packedQuads() {
         return this.quads.clone();

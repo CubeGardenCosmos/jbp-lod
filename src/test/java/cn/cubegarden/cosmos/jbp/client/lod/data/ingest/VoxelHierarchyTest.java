@@ -47,6 +47,28 @@ class VoxelHierarchyTest {
         words[0] = IdMapper.airWithLight(0x11);
         assertEquals(IdMapper.airWithLight(1), VoxelHierarchy.mip(words, 0, 32, word -> 0));
     }
+    @Test void isolatedTranslucentBlocksDoNotPromoteACoarseCell() {
+        long water = 3L << 27;
+        int[] octet = {0, 1, 32, 33, 1024, 1025, 1056, 1057};
+        long[] words = new long[32768];
+        for (int i = 0; i < 3; i++) words[octet[i]] = water;
+        assertEquals(IdMapper.airWithLight(0), VoxelHierarchy.mip(words, 0, 32, word -> 1),
+                "three of eight translucent children are an isolated block, not a surface");
+        words[octet[3]] = water;
+        assertEquals(water, VoxelHierarchy.mip(words, 0, 32, word -> 1),
+                "half of the octet as water is a real water surface and survives mipping");
+        words[octet[3]] = 0;
+        words[octet[4]] = 7L << 27;
+        assertEquals(7L << 27, VoxelHierarchy.mip(words, 0, 32,
+                        word -> IdMapper.getBlockId(word) == 7 ? 15 : 1),
+                "a fully opaque child still wins over any translucent one");
+    }
+    @Test void translucentFallbackKeepsTheAveragedSkyLight() {
+        long[] words = new long[32768];
+        words[0] = IdMapper.withLight(3L << 27, 15);
+        //One of eight children is lit: the averaged cell must become air with ceil(15/8) = 2 sky light.
+        assertEquals(IdMapper.airWithLight(2), VoxelHierarchy.mip(words, 0, 32, word -> 1));
+    }
     @Test void parentInsertionKeepsStoredSiblingOctants() {
         long[] parent = new long[32768], child = new long[32768];
         parent[31 | 31 << 5 | 31 << 10] = 9L << 27;

@@ -21,21 +21,43 @@ public final class VoxelHierarchy {
         return section;
     }
 
+    /** Light dampening of a fully opaque block state (vanilla {@code getLightDampening()}). */
+    private static final int FULLY_OPAQUE = 15;
+    /**
+     * A mip cell only keeps a non-opaque (translucent) winner when at least this many of its eight
+     * children are non-air. Upstream {@code Mipper} lets a single non-air child win the whole cell; on
+     * grass plains that turns one glass pane, ice block or water source from a village/structure into a
+     * cell-sized translucent quad at every coarser LoD level, which then reads as a large fog-tinted
+     * rectangle over the terrain. Requiring half of the octet keeps real bodies of water/glass at coarse
+     * levels while dropping isolated blocks. This is a deliberate deviation from sealed Voxy 263 (whose
+     * own TODO notes the missing opacity/coverage weighting).
+     */
+    static final int MIN_TRANSLUCENT_CHILDREN = 4;
+
     /** Upstream opacity-first selection, with x/y/z tie priority and air-light averaging. */
     public static long mip(long[] data, int base, int stride, LongToIntFunction opacity) {
         long chosen = 0;
-        int best = -1, block = 0, sky = 0;
+        int best = -1, block = 0, sky = 0, nonAir = 0;
         for (int x = 0; x < 2; x++) for (int y = 0; y < 2; y++) for (int z = 0; z < 2; z++) {
             long word = data[base + x + z * stride + y * stride * stride];
             int light = IdMapper.getLightId(word);
             block += light & 240;
             sky += light & 15;
             if (!IdMapper.isAir(word)) {
+                nonAir++;
                 int score = (opacity.applyAsInt(word) << 4) | (x << 2) | (y << 1) | z;
                 if (score > best) { best = score; chosen = word; }
             }
         }
-        return best >= 0 ? chosen : IdMapper.airWithLight(((block / 8) & 240) | ((sky + 7) / 8));
+        if (best < 0) {
+            return IdMapper.airWithLight(((block / 8) & 240) | ((sky + 7) / 8));
+        }
+        if ((best >>> 4) < FULLY_OPAQUE && nonAir < MIN_TRANSLUCENT_CHILDREN) {
+            //An isolated translucent cell is mostly air: keep the surface material/light of the surrounding
+            //terrain instead of promoting one block to a cell-wide translucent face.
+            return IdMapper.airWithLight(((block / 8) & 240) | ((sky + 7) / 8));
+        }
+        return chosen;
     }
 
     /** Upstream WorldUpdater insertion: the compact 16 >> level cube replaces only its own cells. */

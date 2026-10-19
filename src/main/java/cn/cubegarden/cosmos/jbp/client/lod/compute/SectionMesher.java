@@ -1,5 +1,6 @@
 package cn.cubegarden.cosmos.jbp.client.lod.compute;
 
+import cn.cubegarden.cosmos.jbp.client.lod.data.ActivationLog;
 import cn.cubegarden.cosmos.jbp.client.lod.data.IdMapper;
 import cn.cubegarden.cosmos.jbp.client.lod.data.ingest.StoredVoxelSection;
 import cn.cubegarden.cosmos.jbp.client.lod.data.tree.BuiltSection;
@@ -63,6 +64,8 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
         }
     }
 
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("jbp-lod");
+
     private final SectionMesherCore core;
     private final Models models;
     private final ConcurrentHashMap<Long, Integer> waiting = new ConcurrentHashMap<>();
@@ -124,6 +127,10 @@ public final class SectionMesher implements cn.cubegarden.cosmos.jbp.client.lod.
         try {
             BuiltSection result = core.generateMesh(new SectionMesherCore.Input(position, voxels, children));
             if (startedEpoch != modelEpoch.getAsLong()) throw new ModelNotReady(ModelNotReady.NO_BLOCK, true);
+            if (result.translucentQuadCount() > 0 && ActivationLog.first("translucent-mesh")) {
+                LOGGER.info("[JBP-LOD] First section meshed with translucent quads: {} at {}",
+                        result.translucentQuadCount(), SectionPos.pretty(position));
+            }
             waiting.remove(position);
             return result;
         } catch (ModelNotReady missing) {

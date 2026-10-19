@@ -1,5 +1,7 @@
 package cn.cubegarden.cosmos.jbp.client.lod.vk.render;
 
+import cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets;
+
 /**
  * Vanilla fog handling for far LoD terrain.
  *
@@ -27,5 +29,26 @@ public final class LodFogPolicy {
      */
     public static boolean shouldExtendEnvironmentalFog(float environmentalEnd) {
         return environmentalEnd >= 10.0f;
+    }
+
+    /**
+     * Fog block the LoD shader is allowed to use.
+     *
+     * <p>The extension policy above makes vanilla (and Sodium) fog ranges enormous while the LoD draws, and
+     * {@code quads.frag}'s {@code applyLodFog} treats a zero/negative range as "no fog". Relying on the
+     * captured Sodium {@code FogParameters} alone made the LoD shader inherit the vanilla distance fog on
+     * frames where the capture still held the unextended range (for example the first frame after the
+     * runtime becomes active, or a build whose mixin ordering differs): every distant translucent LoD quad
+     * then blended to the sky colour and showed as a pale rectangle over the terrain. While the extension is
+     * active the LoD must therefore be explicitly unfogged instead of merely relying on the captured range.
+     *
+     * @param captured the frame's captured LoD fog block (environmental range and colour)
+     * @return {@link cn.cubegarden.cosmos.jbp.client.lod.api.LodFrameTargets.Fog#disabled()} when the
+     *         extension policy is active, otherwise {@code captured}
+     */
+    public static LodFrameTargets.Fog lodFog(boolean renderEnabled, boolean runtimeActive,
+                                             LodFrameTargets.Fog captured) {
+        return shouldExtendLodFog(renderEnabled, runtimeActive)
+                ? LodFrameTargets.Fog.disabled() : captured;
     }
 }

@@ -90,6 +90,34 @@ class VoxelHierarchyWriterTest {
         assertEquals(voxel(9, 15), level0[(17) | (18 << 5) | (19 << 10)]);
     }
 
+    @Test void isolatedGlassBlockIsDroppedFromCoarserLevelsButAWaterPatchSurvives() {
+        MemoryStore store = new MemoryStore();
+        //Block 3 is a translucent block (zero light dampening), everything else is opaque.
+        LongToIntFunction opacity = word -> IdMapper.getBlockId(word) == 3 ? 0 : 15;
+        var writer = new VoxelHierarchyWriter(store, (p, t, c) -> { }, opacity);
+
+        long[] single = new long[4096];
+        single[0] = voxel(3, 15);
+        writer.write(0, 0, 0, single);
+        long[] level0 = StoredVoxelSection.decode(store.sections.get(SectionPos.pack(0, 0, 0, 0)));
+        assertEquals(voxel(3, 15), level0[0], "level 0 keeps the real block");
+        long[] level1 = StoredVoxelSection.decode(store.sections.get(SectionPos.pack(1, 0, 0, 0)));
+        assertTrue(Arrays.stream(level1).allMatch(IdMapper::isAir),
+                "one translucent block of eight children must not become a parent-level translucent cell");
+        assertEquals(2, IdMapper.getLightId(level1[0]) & 15,
+                "the averaged isolated cell keeps ceil(15/8) sky light");
+
+        MemoryStore patchStore = new MemoryStore();
+        var patchWriter = new VoxelHierarchyWriter(patchStore, (p, t, c) -> { }, opacity);
+        long[] patch = new long[4096];
+        for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) patch[x | (z << 4)] = voxel(3, 15);
+        patchWriter.write(0, 0, 0, patch);
+        long[] patchParent = StoredVoxelSection.decode(
+                patchStore.sections.get(SectionPos.pack(1, 0, 0, 0)));
+        assertEquals(voxel(3, 15), patchParent[0],
+                "half of the children as water is a real surface and survives level 1");
+    }
+
     @Test void identicalWriteDoesNoStorageWorkAndNoNotifications() {
         MemoryStore store = new MemoryStore();
         List<Update> updates = new ArrayList<>();
